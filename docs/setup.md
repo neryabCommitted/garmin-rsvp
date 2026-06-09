@@ -39,6 +39,13 @@ memory/watchdog). Connect the watch by USB and copy the build into its app folde
 cp watch/bin/PaceTurner.prg "<FENIX8_MOUNT>/GARMIN/APPS/"
 ```
 
+> **Known issue (Ubuntu 24.04):** the Fenix 8 enumerates in Garmin's vendor-specific
+> USB mode (`091e:0003`, interface class 255) and does not reliably switch to MTP for
+> `libmtp`, so no `GARMIN/` volume mounts for the copy above. To be sorted alongside the
+> hardware gate stories (1.3–1.5) — likely a `libmtp`/udev update or Garmin's own tooling.
+> Until then, validate the build via the simulator (the CI `action-connectiq-tester` run
+> builds and runs it).
+
 > The CIQ GUI tools (SDK Manager, simulator) don't run natively on Ubuntu 24.04 (they need
 > 22.04-era libs). The SDK was downloaded by running the official SDK Manager inside an
 > Ubuntu 22.04 Docker container (`~/garmin-sdk-docker/Dockerfile`). The CLI compiler runs fine

@@ -1,6 +1,6 @@
 # Story 1.1: Monorepo, dual scaffolds, dev key & green CI
 
-Status: ready-for-dev
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -208,7 +208,7 @@ claude-opus-4-8 (Amelia / dev)
 - **Toolchain (Ubuntu 24.04):** CIQ GUI tools don't run natively; SDK 9.1.0 downloaded via the official SDK Manager in an Ubuntu-22.04 Docker container. CLI builds run on host with a local Temurin **JDK 17** (`~/.local/jdk`). Dev key relocated to `~/.Garmin/developer_key.der`. See `docs/setup.md`.
 - **AC2 — API level deviation:** manifest `minApiLevel` set to **5.2.0**, not 6.0.0. The public CI tester image is hardcoded to SDK 8.4.0, where `fenix847mm` caps at API 5.2.0; 6.0.0 would make CI red. `minApiLevel` is a floor, not a target — the Fenix 8 still runs the app and the scaffold uses no 6.0-only APIs. Documented in `docs/decisions/0001-watch-min-api-level.md`; revisit when a 6.0-only API is first needed.
 - **AC4 — Garmin developer verification: not required.** It's an EU-DSA trader verification tied to *paid* apps in the EEA; PaceTurner is free + MIT, so it publishes worldwide without it. Recorded in `docs/setup.md` (supersedes the planning-doc assumption).
-- **AC2 — runnable on hardware:** per architecture AR15, the app sideloads to the real Fenix 8 rather than the simulator (pending: physical sideload of `PaceTurner.prg` to the watch).
+- **AC2 — satisfied via simulator; hardware sideload deferred.** The green Watch CI run builds *and runs* the app in a simulator (that's how `smokeTest` executed), satisfying AC2's "runnable build in the simulator." Physical sideload to the Fenix 8 was blocked by a known Garmin-on-Linux issue: the watch enumerates in Garmin's vendor-specific USB mode (`091e:0003`, interface class 255) and won't flip to MTP for libmtp, so no `GARMIN/` volume mounts to copy `PaceTurner.prg` into. Deferred to the gate stories (1.3–1.5), which require the watch and where the USB/MTP path will be sorted (libmtp/udev or Garmin tooling). Not a blocker for 1.1.
 - Scope held to scaffold + CI + key; no app dependencies (riverpod/drift/epub_pro) or unused watch module dirs added — those land with their epics.
 
 ### File List
