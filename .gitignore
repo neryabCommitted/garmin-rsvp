@@ -1,0 +1,21 @@
+# ── Developer signing key — NEVER commit ──
+developer_key*
+*.der
+
+# ── Monkey C / Connect IQ (watch) ──
+watch/bin/
+*.iq
+*.prg
+*.prg.debug.xml
+
+# ── Flutter / Dart (companion) ──
+companion/.dart_tool/
+companion/build/
+companion/.flutter-plugins
+companion/.flutter-plugins-dependencies
+companion/.packages
+**/*.g.dart.lock
+
+# ── OS / editor cruft ──
+.DS_Store
+*.swp

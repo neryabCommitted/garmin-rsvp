@@ -1,5 +1,5 @@
 # generated: 2026-06-09
-# last_updated: 2026-06-09
+# last_updated: 2026-06-09  # story 1.1 contexted
 # project: garmin_RSVP
 # project_key: NOKEY
 # tracking_system: file-system
@@ -43,8 +43,8 @@ story_location: _bmad-output/implementation-artifacts
 
 development_status:
   # ── Epic 1: Foundation & Hardware Feasibility ──
-  epic-1: backlog
-  1-1-monorepo-dual-scaffolds-dev-key-green-ci: backlog
+  epic-1: in-progress
+  1-1-monorepo-dual-scaffolds-dev-key-green-ci: in-progress
   1-2-protocol-spec-md-and-mirrored-constants: backlog
   1-3-gate-v1-hands-off-screen-on-feasibility-hardware: backlog
   1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware: backlog

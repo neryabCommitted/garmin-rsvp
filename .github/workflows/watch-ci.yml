@@ -1,0 +1,28 @@
+name: Watch CI
+
+on:
+  push:
+    paths:
+      - 'watch/**'
+      - '.github/workflows/watch-ci.yml'
+  pull_request:
+    paths:
+      - 'watch/**'
+      - '.github/workflows/watch-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run No Evil tests (Strict, fenix847mm)
+        id: run_tests
+        uses: matco/action-connectiq-tester@v1
+        with:
+          path: watch
+          device: fenix847mm
+          # No certificate: the action generates a temporary one for tests.
+          # (The real 4096-bit developer key is only needed for release signing.)

@@ -1,0 +1,7 @@
+project.manifest = manifest.xml
+
+# App sources plus host-side unit tests. (:test)-annotated code is included only
+# in unit-test builds (monkeyc --unit-test) and stripped from normal/release builds,
+# so source-test/ never ships. See docs/setup.md.
+base.sourcePath = source;source-test
+base.resourcePath = resources

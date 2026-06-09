@@ -1,0 +1,16 @@
+# Strict static analysis for the PaceTurner companion (architecture AR4).
+# Activates the recommended Flutter lints plus stricter language modes so the
+# codebase stays type-tight from commit 1.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    - prefer_final_locals
+    - prefer_const_declarations
+    - directives_ordering

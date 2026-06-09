@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<iq:manifest xmlns:iq="http://www.garmin.com/xml/connectiq" version="3">
+    <iq:application id="dd7ace3fb3f44551bce0cd350896426f"
+                    type="watch-app"
+                    name="@Strings.AppName"
+                    entry="PaceTurnerApp"
+                    launcherIcon="@Drawables.LauncherIcon"
+                    minApiLevel="5.2.0">
+        <iq:products>
+            <iq:product id="fenix847mm"/>
+        </iq:products>
+        <iq:permissions/>
+        <iq:languages>
+            <iq:language>eng</iq:language>
+        </iq:languages>
+    </iq:application>
+</iq:manifest>

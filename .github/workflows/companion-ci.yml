@@ -1,0 +1,33 @@
+name: Companion CI
+
+on:
+  push:
+    paths:
+      - 'companion/**'
+      - '.github/workflows/companion-ci.yml'
+  pull_request:
+    paths:
+      - 'companion/**'
+      - '.github/workflows/companion-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: companion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Analyze (strict)
+        run: flutter analyze
+      - name: Test
+        run: flutter test
