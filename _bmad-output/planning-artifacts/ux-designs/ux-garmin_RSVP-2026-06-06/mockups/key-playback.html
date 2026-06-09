@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaceTurner — Playback (key screen)</title>
+<style>
+/*
+  ============================================================================
+  PaceTurner — Watch Playback surface, key-screen mock (Playing + Paused)
+  Garmin Fenix 8, 454x454 ROUND AMOLED. Inline CSS only, no JS, fully offline.
+
+  Spine sections governing this screen:
+    DESIGN.md:
+      - Colors            (void / ink / ink-dim / ink-faint / pivot)
+      - Typography        (word-display 48px/400, watch-meta 22px)
+      - Components: word-display, guide-marks, phantom-words, progress-readout
+      - Layout & Spacing: Playback regime (anchor at 35% of display width,
+                          vertically centered; phantoms flank, clipped by circle)
+    EXPERIENCE.md:
+      - Component Patterns: Word display (one word at the anchor)
+      - RSVP Presentation & Timing (ORP pivot tiers; 35% anchor)
+      - State Patterns (Playing canonical; Paused reveals progress readout)
+
+  Hard spine rule honored: while words flow, NOTHING but the word + guides +
+  phantoms is on screen. Progress/WPM appear ONLY on Paused.
+  ============================================================================
+*/
+
+:root{
+  /* All color tokens from DESIGN.md frontmatter `colors:` */
+  --void:      #000000; /* token: colors.void  — true-black AMOLED canvas */
+  --ink:       #EAE6DF; /* token: colors.ink   — current word, warm off-white */
+  --ink-dim:   #8A867F; /* token: colors.ink-dim   — paused chrome / progress readout */
+  --ink-faint: #45423E; /* token: colors.ink-faint — guide marks + phantom words */
+  --pivot:     #FF5349; /* token: colors.pivot — pivot letter + anchor ticks */
+
+  --display: 454px;          /* 454x454 round display, rendered 1:1 CSS px */
+  --anchor: 158.9px;         /* anchor line = 35% of display width (DESIGN: components.word-display.anchor) */
+}
+
+/* Atkinson Hyperlegible is the spec watch voice (DESIGN.md Typography).
+   The 'Inter'/'Segoe UI'/system-ui chain is a fallback for offline viewing only;
+   no @font-face / network request is made. */
+*{ box-sizing:border-box; margin:0; padding:0; }
+
+body{
+  background:#1a1a1a;       /* neutral page gray so the black displays read as displays */
+  font-family:'Atkinson Hyperlegible','Inter','Segoe UI',system-ui,sans-serif;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:24px;
+  padding:40px 20px;
+}
+
+.row{
+  display:flex;
+  gap:48px;
+  flex-wrap:wrap;
+  justify-content:center;
+  align-items:flex-start;
+}
+
+.stack{ display:flex; flex-direction:column; align-items:center; gap:14px; }
+
+/* ---- Realistic round watch frame: dark bezel ring around the round display ---- */
+.bezel{
+  width:494px; height:494px;     /* 454 display + 20px bezel ring each side */
+  border-radius:50%;
+  background:radial-gradient(circle at 50% 35%, #2c2c2c 0%, #161616 60%, #050505 100%);
+  box-shadow:0 0 0 2px #000, 0 10px 30px rgba(0,0,0,.6), inset 0 0 8px rgba(0,0,0,.9);
+  display:flex; align-items:center; justify-content:center;
+}
+
+/* ---- The display: pure-black round canvas (DESIGN: components.word-display.background = void) ---- */
+.display{
+  position:relative;
+  width:var(--display);
+  height:var(--display);
+  border-radius:50%;
+  background:var(--void);        /* token: colors.void */
+  overflow:hidden;               /* phantoms clipped by the circle "without apology" */
+}
+
+/* =========================================================================
+   PLAYBACK COMPOSITION
+   One word on the anchor line at 35% of width, vertically centered.
+
+   Anchor mechanism (no-JS, exact): a zero-width anchor point is placed at
+   left=35%, top=50%. Inside it three inline spans sit on one baseline:
+     [ before ][ pivot ][ after ]
+   The PIVOT glyph is centered on the anchor point via `translateX(-50%)`
+   applied to the whole line PLUS a per-glyph correction: we wrap so the
+   line's transform origin is the pivot. Concretely the `.before` span is
+   pulled left by its own width and half the pivot, using a flex row whose
+   justify reference is the pivot. We achieve this by absolutely stacking the
+   word around the anchor: `.before` ends at the anchor-minus-half-pivot,
+   `.pivot` straddles the anchor, `.after` begins at anchor-plus-half-pivot.
+   ========================================================================= */
+
+/* Anchor mechanism (no-JS, exact): the PIVOT glyph is the layout origin.
+   `.anchor-pt` is the pivot's own box, centered on the 35% anchor line and
+   vertically centered. `.before` hangs off the pivot's LEFT edge (right:100%),
+   `.after` hangs off the pivot's RIGHT edge (left:100%). This puts the pivot
+   glyph's horizontal center exactly on the anchor regardless of font widths —
+   the requirement from DESIGN components.word-display + EXPERIENCE RSVP timing
+   ("pivot's center sits on the anchor line at 35% of display width"). */
+.anchor-pt{
+  position:absolute;
+  top:50%;                        /* vertically centered (Playback regime) */
+  left:var(--anchor);             /* anchor column at 35% of display width */
+  transform:translate(-50%,-50%); /* center the PIVOT glyph on the anchor */
+  /* word-display token: Typography.word-display — 48px / weight 400 */
+  font-size:48px;
+  font-weight:400;
+  line-height:1;
+  letter-spacing:0em;             /* token: typography.word-display.letterSpacing */
+  color:var(--pivot);             /* token: colors.pivot — pivot letter */
+  white-space:nowrap;
+}
+.before{
+  position:absolute;
+  right:100%;                     /* sits immediately left of the pivot glyph */
+  top:0;
+  color:var(--ink);               /* token: colors.ink — rest of word, full brightness */
+}
+.after{
+  position:absolute;
+  left:100%;                      /* sits immediately right of the pivot glyph */
+  top:0;
+  color:var(--ink);               /* token: colors.ink */
+}
+
+/* ----- Phantom words: previous + next, same baseline, same size, ink-faint ----- */
+/* token: components.phantom-words.color = colors.ink-faint */
+.phantom{
+  position:absolute;
+  top:50%;
+  transform:translateY(-50%);
+  font-size:48px;                /* same size as focal word */
+  font-weight:400;
+  line-height:1;
+  color:var(--ink-faint);        /* token: colors.ink-faint */
+  white-space:nowrap;
+}
+/* prev word ends a gap to the LEFT of "remarkable"'s left edge;
+   next word starts a gap to the RIGHT of its right edge. Same baseline.
+   "rem" is ~75px left of the anchor; "arkable" is ~155px right of it at 48px. */
+.phantom.prev{ right:calc(100% - var(--anchor) + 130px); } /* right edge sits left of the word */
+.phantom.next{ left:calc(var(--anchor) + 205px); }          /* left edge sits right of the word */
+
+/* ----- Guide marks: split hairlines above & below, gap at anchor, ticks ----- */
+/* token: components.guide-marks.color = colors.ink-faint ; tick-color = colors.pivot */
+.guide{ position:absolute; left:0; width:100%; height:0; }
+.guide.above{ top:calc(50% - 44px); }
+.guide.below{ top:calc(50% + 44px); }
+.hair{
+  position:absolute;
+  height:1px;
+  background:var(--ink-faint);   /* token: colors.ink-faint — guide hairline */
+}
+/* left hairline ends just before the anchor gap; right hairline starts after it */
+.hair.left  { left:0;                       width:calc(var(--anchor) - 16px); }
+.hair.right { left:calc(var(--anchor) + 16px); right:0; width:auto; }
+/* short anchor ticks in pivot red at the anchor column (geometric, color-redundant) */
+.tick{
+  position:absolute;
+  left:var(--anchor);
+  width:2px;
+  height:10px;
+  background:var(--pivot);       /* token: components.guide-marks.tick-color = colors.pivot */
+  transform:translateX(-50%);
+}
+.tick.up  { top:-10px; }
+.tick.down{ top:0; }
+
+/* ----- Progress readout: PAUSED ONLY (DESIGN: progress-readout; EXPERIENCE: Paused) ----- */
+.progress{
+  position:absolute;
+  left:50%;
+  top:62%;                       /* below the word line, inside the safe area */
+  transform:translateX(-50%);
+  /* watch-meta token: Typography.watch-meta — 22px / 400 */
+  font-size:22px;
+  font-weight:400;
+  color:var(--ink-dim);          /* token: components.progress-readout.color = colors.ink-dim */
+  white-space:nowrap;
+}
+/* Quiet 'paused' word above, ink-dim, text not icon (no-icons voice rule) */
+.paused-tag{
+  position:absolute;
+  left:50%;
+  top:30%;
+  transform:translateX(-50%);
+  font-size:22px;                /* watch-meta */
+  font-weight:400;
+  letter-spacing:0.15em;
+  color:var(--ink-dim);          /* token: colors.ink-dim */
+}
+
+/* ----- Caption row beneath the watches ----- */
+.caption{
+  color:#6f6f6f;                 /* dim gray label, page chrome (not a watch token) */
+  font-size:14px;
+  text-align:center;
+  max-width:454px;
+  line-height:1.5;
+}
+.caption b{ color:#9a9a9a; font-weight:600; }
+.title{
+  color:#bdbdbd; font-size:13px; letter-spacing:.04em; text-align:center;
+}
+</style>
+</head>
+<body>
+
+  <div class="title">PaceTurner — Watch Playback surface · Garmin Fenix 8 (454×454 round AMOLED) · 1:1 px</div>
+
+  <div class="row">
+
+    <!-- ================= STATE 1 — PLAYING (canonical) ================= -->
+    <div class="stack">
+      <div class="bezel">
+        <div class="display">
+
+          <!-- Guide marks: split hairlines above & below with anchor-column gap + red ticks -->
+          <div class="guide above">
+            <div class="hair left"></div>
+            <div class="hair right"></div>
+            <div class="tick up"></div>
+          </div>
+          <div class="guide below">
+            <div class="hair left"></div>
+            <div class="hair right"></div>
+            <div class="tick down"></div>
+          </div>
+
+          <!-- Phantom words flanking on the same baseline, ink-faint, clipped by circle.
+               prev="truly" sits left of the focal word; next="journey" sits right. -->
+          <div class="phantom prev">truly</div>
+          <div class="phantom next">journey</div>
+
+          <!-- Focal word "remarkable" (10 letters). Pivot = 4th letter "a" per the
+               EXPERIENCE.md ORP tier table (<=13 -> 4th letter)
+               (the .anchor-pt element IS the pivot glyph, centered on the 35%
+               anchor). Pivot in colors.pivot; before/after in colors.ink. -->
+          <div class="anchor-pt"><span class="before">rem</span>a<span class="after">rkable</span></div>
+
+        </div>
+      </div>
+      <div class="caption"><b>Playing (canonical).</b> One luminous word on the anchor; nothing else — no progress, no chrome.</div>
+    </div>
+
+    <!-- ================= STATE 2 — PAUSED ================= -->
+    <div class="stack">
+      <div class="bezel">
+        <div class="display">
+
+          <!-- Same frozen composition -->
+          <div class="guide above">
+            <div class="hair left"></div>
+            <div class="hair right"></div>
+            <div class="tick up"></div>
+          </div>
+          <div class="guide below">
+            <div class="hair left"></div>
+            <div class="hair right"></div>
+            <div class="tick down"></div>
+          </div>
+
+          <div class="phantom prev">truly</div>
+          <div class="phantom next">journey</div>
+
+          <div class="anchor-pt"><span class="before">rem</span>a<span class="after">rkable</span></div>
+
+          <!-- Quiet text 'paused' (no icon) in ink-dim, above -->
+          <div class="paused-tag">paused</div>
+
+          <!-- Progress readout fades in below, ink-dim, watch-meta -->
+          <div class="progress">43% · 3h 12m left · 250 wpm</div>
+
+        </div>
+      </div>
+      <div class="caption"><b>Paused.</b> Same word frozen; progress readout (book % · time left · WPM) fades in below in ink-dim.</div>
+    </div>
+
+  </div>
+
+</body>
+</html>
