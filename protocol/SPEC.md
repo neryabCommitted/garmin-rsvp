@@ -43,9 +43,10 @@ local decode failure — never guessed around, never silently retried (§8).
 
 ### §1.1 Transport
 
-Messages are Connect IQ app messages: each envelope (§3) is a flat dictionary
-of primitive values whose `p` field may be a binary byte array. The codec
-layer specified here is transport-agnostic.
+Messages are Connect IQ app messages: each envelope (§3) is a dictionary
+whose top-level values are primitives except `p`, which carries either a
+nested dictionary or a binary byte array depending on the message type (§4).
+The codec layer specified here is transport-agnostic.
 
 > **Platform note:** sending a `ByteArray` as a message value over
 > `Communications.transmit` requires Connect IQ **API ≥ 6.0.0**. Protocol
@@ -62,6 +63,12 @@ layer specified here is transport-agnostic.
 | Durations / dwell | **milliseconds**, integer |
 | Content fingerprint | opaque equality token (§7) |
 | ORP pivot | 0-based **byte** index into the word's UTF-8 bytes, precomputed by the phone (§5) |
+
+All protocol integers — envelope fields and payload fields alike (`v`, `off`,
+`n`, `tw`, `tb`, `o`, `cb`, `ts`) — are non-negative and MUST fit a **signed
+32-bit** integer (≤ 2 147 483 647): the watch runtime's native integer
+(Monkey C `Number`) is signed 32-bit. A value outside that range is malformed
+(`malformedEnvelope`, §8).
 
 ---
 
@@ -82,9 +89,10 @@ layer specified here is transport-agnostic.
 
 ## §3 Envelope
 
-Every message is a flat dictionary (Connect IQ `Dictionary`; Dart
-`Map<String, Object?>`) with exactly these six keys — short literal strings,
-case-sensitive:
+Every message is a dictionary (Connect IQ `Dictionary`; Dart
+`Map<String, Object?>`) whose keys are drawn from exactly these six — short
+literal strings, case-sensitive. Which of them a given message carries is
+defined by the per-type matrix below:
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -112,14 +120,26 @@ top-level key as malformed.
 
 “required” = present and non-null. “—” = unused: the sender SHOULD omit the
 key (or MAY set it to null); receivers MUST treat an omitted key and a null
-value identically. “optional” = may carry context when relevant (§4.5).
+value identically, and MUST treat a **non-null** value in an unused field as
+malformed (`malformedEnvelope`) — there are no implicit extensions (§2).
+“optional” = may carry context when relevant (§4.5).
+
+Where present, `off` MUST be ≥ 0 and `n` MUST be ≥ 1; violations are
+malformed.
 
 A receiver validates an envelope in this order:
 
 1. `v` present, integer, equals its own version — else `versionMismatch` (§8).
 2. `t` present and one of the five §4 strings — else `unknownType`.
-3. Required fields for that `t` present with the types above — else
-   `malformedEnvelope`.
+3. Structure for that `t` matches the matrix — required fields present with
+   the types above (`off` ≥ 0, `n` ≥ 1, `fp` per §7), unused fields omitted
+   or null, no unknown keys — else `malformedEnvelope`.
+
+Step 3 includes the payload's structure: for dictionary payloads, the keys
+each §4 table marks required MUST be present with the types it declares
+(`ch` non-empty). Value semantics beyond type — chapter ordering, `src`
+values, range arithmetic against `tw` — are the consumer's concern, not
+envelope validation.
 
 ---
 
@@ -162,10 +182,10 @@ Watch asks for word records. `fp`, `off`, `n` required; `p` unused.
 Semantics: "send me `n` records starting at absolute word index `off` of the
 content identified by `fp`."
 
-- `n` MUST be ≥ 1. The phone replies with `chunkData` for exactly the
-  requested range, or `error` (`rangeUnavailable` if `off < 0`, `n < 1`, or
-  `off + n > tw`; `unknownFingerprint` if `fp` doesn't match its active
-  book).
+- `n` MUST be ≥ 1 and `off` MUST be ≥ 0 — violations are malformed envelopes
+  (§3, `malformedEnvelope`). The phone replies with `chunkData` for exactly
+  the requested range, or `error` (`rangeUnavailable` if `off + n > tw`;
+  `unknownFingerprint` if `fp` doesn't match its active book).
 - `n` is chosen by the watch and bounded only by transport message-size
   limits (calibrated outside this spec); the phone MUST NOT answer with a
   different range than requested.
@@ -239,6 +259,10 @@ past its boundary, guess field values, or silently skip bytes.
 Already-decoded records MAY be discarded; v1 treats the whole chunk as failed
 (re-request is the recovery, §8).
 
+The UTF-8-boundary requirement on `orpPivot` (first byte of a sequence) is
+the **sender's** obligation, enforced at encode time. Decoders MUST NOT
+validate or reject on it — the malformed conditions above are exhaustive.
+
 ### §5.1 Timing model
 
 The stream stores, per word, the **additive bonus** in ms — never a total
@@ -309,9 +333,9 @@ Error codes (`p.c` values), v1:
 |---|---|---|
 | `versionMismatch` | Envelope `v` differs from receiver's version (§2) | either |
 | `unknownType` | Envelope `t` not one of the five §4 types | either |
-| `malformedEnvelope` | Required field missing / wrong type / unknown key / bad `fp` shape | either |
+| `malformedEnvelope` | Required field missing / wrong type / unknown key / bad `fp` shape / non-null unused field / `off` < 0 / `n` < 1 | either |
 | `unknownFingerprint` | `fp` doesn't match the receiver's active content | either |
-| `rangeUnavailable` | `chunkRequest` range outside `[0, tw)` | phone |
+| `rangeUnavailable` | `chunkRequest` range extends past the book (`off + n > tw`) | phone |
 | `decodeFailure` | `chunkData` payload malformed per §5 (truncated, bad field, reserved bits, length mismatch) | watch |
 | `internal` | Unexpected implementation failure | either |
 

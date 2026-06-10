@@ -68,6 +68,50 @@ final class Envelope {
   final Object? payload;
 }
 
+// Builder input validation: an envelope the peer is bound to reject is a
+// phone-side bug, caught here as [ArgumentError] — the same posture as
+// `encodeChunk`.
+
+void _checkFingerprint(String fingerprint) {
+  if (!_fingerprintForm.hasMatch(fingerprint)) {
+    throw ArgumentError.value(
+      fingerprint,
+      'fingerprint',
+      'SPEC §7: fingerprint must be ${ProtocolKeys.fingerprintLength} '
+          'lowercase hex chars',
+    );
+  }
+}
+
+void _checkOffset(int offset) {
+  if (offset < 0) {
+    throw ArgumentError.value(offset, 'offset', 'SPEC §3: off must be >= 0');
+  }
+}
+
+void _checkCount(int count) {
+  if (count < 1) {
+    throw ArgumentError.value(count, 'count', 'SPEC §3: n must be >= 1');
+  }
+}
+
+/// Counts SPEC §5 records by hopping headers (`wordLen` only — no field
+/// validation); returns -1 when the hops don't land exactly on the payload
+/// end.
+int _recordCount(Uint8List payload) {
+  var count = 0;
+  var pos = 0;
+  while (pos < payload.length) {
+    final wordLen = payload[pos];
+    if (wordLen == 0) {
+      return -1;
+    }
+    pos += ProtocolKeys.recordHeaderBytes + wordLen;
+    count++;
+  }
+  return pos == payload.length ? count : -1;
+}
+
 /// SPEC §4.1 — `manifest` envelope (phone → watch).
 Map<String, Object?> manifestEnvelope({
   required String fingerprint,
@@ -75,34 +119,47 @@ Map<String, Object?> manifestEnvelope({
   required int totalWords,
   required int totalBonusMs,
   required List<ChapterEntry> chapters,
-}) =>
-    <String, Object?>{
-      ProtocolKeys.keyType: ProtocolKeys.msgManifest,
-      ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
-      ProtocolKeys.keyFingerprint: fingerprint,
-      ProtocolKeys.keyPayload: <String, Object?>{
-        ProtocolKeys.keyTitle: title,
-        ProtocolKeys.keyTotalWords: totalWords,
-        ProtocolKeys.keyTotalBonusMs: totalBonusMs,
-        ProtocolKeys.keyChapters: <Object?>[
-          for (final chapter in chapters) chapter.toMap(),
-        ],
-      },
-    };
+}) {
+  _checkFingerprint(fingerprint);
+  if (chapters.isEmpty) {
+    throw ArgumentError.value(
+      chapters,
+      'chapters',
+      'SPEC §4.1: ch must have at least one entry',
+    );
+  }
+  return <String, Object?>{
+    ProtocolKeys.keyType: ProtocolKeys.msgManifest,
+    ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
+    ProtocolKeys.keyFingerprint: fingerprint,
+    ProtocolKeys.keyPayload: <String, Object?>{
+      ProtocolKeys.keyTitle: title,
+      ProtocolKeys.keyTotalWords: totalWords,
+      ProtocolKeys.keyTotalBonusMs: totalBonusMs,
+      ProtocolKeys.keyChapters: <Object?>[
+        for (final chapter in chapters) chapter.toMap(),
+      ],
+    },
+  };
+}
 
 /// SPEC §4.2 — `chunkRequest` envelope (watch → phone).
 Map<String, Object?> chunkRequestEnvelope({
   required String fingerprint,
   required int offset,
   required int count,
-}) =>
-    <String, Object?>{
-      ProtocolKeys.keyType: ProtocolKeys.msgChunkRequest,
-      ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
-      ProtocolKeys.keyFingerprint: fingerprint,
-      ProtocolKeys.keyOffset: offset,
-      ProtocolKeys.keyCount: count,
-    };
+}) {
+  _checkFingerprint(fingerprint);
+  _checkOffset(offset);
+  _checkCount(count);
+  return <String, Object?>{
+    ProtocolKeys.keyType: ProtocolKeys.msgChunkRequest,
+    ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
+    ProtocolKeys.keyFingerprint: fingerprint,
+    ProtocolKeys.keyOffset: offset,
+    ProtocolKeys.keyCount: count,
+  };
+}
 
 /// SPEC §4.3 — `chunkData` envelope (phone → watch). [payload] is the SPEC §5
 /// binary produced by `encodeChunk`, exactly [count] records from [offset].
@@ -111,15 +168,29 @@ Map<String, Object?> chunkDataEnvelope({
   required int offset,
   required int count,
   required Uint8List payload,
-}) =>
-    <String, Object?>{
-      ProtocolKeys.keyType: ProtocolKeys.msgChunkData,
-      ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
-      ProtocolKeys.keyFingerprint: fingerprint,
-      ProtocolKeys.keyOffset: offset,
-      ProtocolKeys.keyCount: count,
-      ProtocolKeys.keyPayload: payload,
-    };
+}) {
+  _checkFingerprint(fingerprint);
+  _checkOffset(offset);
+  _checkCount(count);
+  final records = _recordCount(payload);
+  if (records != count) {
+    throw ArgumentError.value(
+      count,
+      'count',
+      'SPEC §4.3: payload carries '
+          '${records < 0 ? 'a malformed record sequence' : '$records records'}'
+          ', n says $count',
+    );
+  }
+  return <String, Object?>{
+    ProtocolKeys.keyType: ProtocolKeys.msgChunkData,
+    ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
+    ProtocolKeys.keyFingerprint: fingerprint,
+    ProtocolKeys.keyOffset: offset,
+    ProtocolKeys.keyCount: count,
+    ProtocolKeys.keyPayload: payload,
+  };
+}
 
 /// SPEC §4.4 — `position` envelope (both directions). [timestamp] is Unix
 /// epoch seconds; [source] is `ProtocolKeys.srcWatch` or `srcPhone`.
@@ -128,17 +199,20 @@ Map<String, Object?> positionEnvelope({
   required int offset,
   required int timestamp,
   required String source,
-}) =>
-    <String, Object?>{
-      ProtocolKeys.keyType: ProtocolKeys.msgPosition,
-      ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
-      ProtocolKeys.keyFingerprint: fingerprint,
-      ProtocolKeys.keyOffset: offset,
-      ProtocolKeys.keyPayload: <String, Object?>{
-        ProtocolKeys.keyTimestamp: timestamp,
-        ProtocolKeys.keySource: source,
-      },
-    };
+}) {
+  _checkFingerprint(fingerprint);
+  _checkOffset(offset);
+  return <String, Object?>{
+    ProtocolKeys.keyType: ProtocolKeys.msgPosition,
+    ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
+    ProtocolKeys.keyFingerprint: fingerprint,
+    ProtocolKeys.keyOffset: offset,
+    ProtocolKeys.keyPayload: <String, Object?>{
+      ProtocolKeys.keyTimestamp: timestamp,
+      ProtocolKeys.keySource: source,
+    },
+  };
+}
 
 /// SPEC §4.5 — `error` envelope (both directions). [fingerprint] and [offset]
 /// are context, set when known.
@@ -147,17 +221,24 @@ Map<String, Object?> errorEnvelope({
   String? message,
   String? fingerprint,
   int? offset,
-}) =>
-    <String, Object?>{
-      ProtocolKeys.keyType: ProtocolKeys.msgError,
-      ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
-      ProtocolKeys.keyFingerprint: ?fingerprint,
-      ProtocolKeys.keyOffset: ?offset,
-      ProtocolKeys.keyPayload: <String, Object?>{
-        ProtocolKeys.keyErrorCode: code,
-        ProtocolKeys.keyErrorMessage: ?message,
-      },
-    };
+}) {
+  if (fingerprint != null) {
+    _checkFingerprint(fingerprint);
+  }
+  if (offset != null) {
+    _checkOffset(offset);
+  }
+  return <String, Object?>{
+    ProtocolKeys.keyType: ProtocolKeys.msgError,
+    ProtocolKeys.keyVersion: ProtocolKeys.protocolVersion,
+    ProtocolKeys.keyFingerprint: ?fingerprint,
+    ProtocolKeys.keyOffset: ?offset,
+    ProtocolKeys.keyPayload: <String, Object?>{
+      ProtocolKeys.keyErrorCode: code,
+      ProtocolKeys.keyErrorMessage: ?message,
+    },
+  };
+}
 
 /// Validates a received envelope per the SPEC §3 order — version gate first
 /// (SPEC §2: an unknown `v` is rejected before anything else is interpreted,
@@ -200,6 +281,16 @@ Envelope decodeEnvelope(Map<Object?, Object?> raw) {
       );
     }
   }
+  // SPEC §3: a non-null value in an unused ("—") field is malformed — there
+  // are no implicit extensions.
+  for (final key in _unusedFields[type]!) {
+    if (raw[key] != null) {
+      throw EnvelopeException(
+        ProtocolKeys.errMalformedEnvelope,
+        'SPEC §3: $type does not use $key',
+      );
+    }
+  }
 
   final fingerprint = raw[ProtocolKeys.keyFingerprint];
   if (fingerprint != null &&
@@ -212,16 +303,16 @@ Envelope decodeEnvelope(Map<Object?, Object?> raw) {
   }
   final offset = raw[ProtocolKeys.keyOffset];
   final count = raw[ProtocolKeys.keyCount];
-  if (offset is! int?) {
+  if (offset is! int? || (offset != null && offset < 0)) {
     throw EnvelopeException(
       ProtocolKeys.errMalformedEnvelope,
-      'SPEC §3: off must be an integer',
+      'SPEC §3: off must be an integer >= 0',
     );
   }
-  if (count is! int?) {
+  if (count is! int? || (count != null && count < 1)) {
     throw EnvelopeException(
       ProtocolKeys.errMalformedEnvelope,
-      'SPEC §3: n must be an integer',
+      'SPEC §3: n must be an integer >= 1',
     );
   }
 
@@ -272,9 +363,19 @@ const Map<String, List<String>> _requiredFields = {
   ProtocolKeys.msgError: [ProtocolKeys.keyPayload],
 };
 
-/// SPEC §4 payload-kind checks: binary for `chunkData`, dictionaries with
-/// their required keys elsewhere. Deep payload semantics (chapter ordering,
-/// source values) are the consumer's concern, not the codec's.
+/// SPEC §3 unused ("—") fields per type — a non-null value here is malformed.
+const Map<String, List<String>> _unusedFields = {
+  ProtocolKeys.msgManifest: [ProtocolKeys.keyOffset, ProtocolKeys.keyCount],
+  ProtocolKeys.msgChunkRequest: [ProtocolKeys.keyPayload],
+  ProtocolKeys.msgChunkData: [],
+  ProtocolKeys.msgPosition: [ProtocolKeys.keyCount],
+  ProtocolKeys.msgError: [ProtocolKeys.keyCount],
+};
+
+/// SPEC §4 payload-structure checks: binary for `chunkData`; dictionaries
+/// elsewhere with their required keys present in the kinds the §4 tables
+/// declare. Value semantics beyond type (chapter ordering, `src` values,
+/// range arithmetic) are the consumer's concern, not the codec's (SPEC §3).
 void _validatePayload(String type, Object? payload) {
   switch (type) {
     case ProtocolKeys.msgChunkData:
@@ -285,39 +386,67 @@ void _validatePayload(String type, Object? payload) {
         );
       }
     case ProtocolKeys.msgManifest:
-      _requirePayloadKeys(type, payload, const [
-        ProtocolKeys.keyTitle,
-        ProtocolKeys.keyTotalWords,
-        ProtocolKeys.keyTotalBonusMs,
-        ProtocolKeys.keyChapters,
-      ]);
+      final map = _payloadMap(type, payload);
+      _requireKind<String>(type, map, ProtocolKeys.keyTitle);
+      _requireKind<int>(type, map, ProtocolKeys.keyTotalWords);
+      _requireKind<int>(type, map, ProtocolKeys.keyTotalBonusMs);
+      final chapters =
+          _requireKind<List<Object?>>(type, map, ProtocolKeys.keyChapters);
+      if (chapters.isEmpty) {
+        throw EnvelopeException(
+          ProtocolKeys.errMalformedEnvelope,
+          'SPEC §4.1: ch must have at least one entry',
+        );
+      }
+      for (final entry in chapters) {
+        if (entry is! Map<Object?, Object?>) {
+          throw EnvelopeException(
+            ProtocolKeys.errMalformedEnvelope,
+            'SPEC §4.1: ch entries must be dictionaries',
+          );
+        }
+        _requireKind<int>(type, entry, ProtocolKeys.keyChapterOffset);
+        _requireKind<String>(type, entry, ProtocolKeys.keyTitle);
+        _requireKind<int>(type, entry, ProtocolKeys.keyChapterCumBonusMs);
+      }
     case ProtocolKeys.msgPosition:
-      _requirePayloadKeys(type, payload, const [
-        ProtocolKeys.keyTimestamp,
-        ProtocolKeys.keySource,
-      ]);
+      final map = _payloadMap(type, payload);
+      _requireKind<int>(type, map, ProtocolKeys.keyTimestamp);
+      _requireKind<String>(type, map, ProtocolKeys.keySource);
     case ProtocolKeys.msgError:
-      _requirePayloadKeys(type, payload, const [ProtocolKeys.keyErrorCode]);
+      final map = _payloadMap(type, payload);
+      _requireKind<String>(type, map, ProtocolKeys.keyErrorCode);
+      final message = map[ProtocolKeys.keyErrorMessage];
+      if (message != null && message is! String) {
+        throw EnvelopeException(
+          ProtocolKeys.errMalformedEnvelope,
+          'SPEC §4.5: m must be a string',
+        );
+      }
     default:
-      // chunkRequest carries no payload; its absence was already accepted by
-      // the matrix (p is unused for it, SPEC §4.2).
+      // chunkRequest carries no payload; a non-null `p` was already rejected
+      // by the unused-field check (SPEC §4.2).
       break;
   }
 }
 
-void _requirePayloadKeys(String type, Object? payload, List<String> keys) {
+Map<Object?, Object?> _payloadMap(String type, Object? payload) {
   if (payload is! Map<Object?, Object?>) {
     throw EnvelopeException(
       ProtocolKeys.errMalformedEnvelope,
       'SPEC §4: $type payload must be a dictionary',
     );
   }
-  for (final key in keys) {
-    if (payload[key] == null) {
-      throw EnvelopeException(
-        ProtocolKeys.errMalformedEnvelope,
-        'SPEC §4: $type payload requires $key',
-      );
-    }
+  return payload;
+}
+
+T _requireKind<T>(String type, Map<Object?, Object?> map, String key) {
+  final value = map[key];
+  if (value is! T) {
+    throw EnvelopeException(
+      ProtocolKeys.errMalformedEnvelope,
+      'SPEC §4: $type payload requires $key as $T',
+    );
   }
+  return value;
 }

@@ -1,5 +1,5 @@
 # generated: 2026-06-09
-# last_updated: 2026-06-10  # story 1.2 in review
+# last_updated: 2026-06-10  # story 1.2 done (review complete, fixes applied)
 # project: garmin_RSVP
 # project_key: NOKEY
 # tracking_system: file-system
@@ -45,7 +45,7 @@ development_status:
   # ── Epic 1: Foundation & Hardware Feasibility ──
   epic-1: in-progress
   1-1-monorepo-dual-scaffolds-dev-key-green-ci: done
-  1-2-protocol-spec-md-and-mirrored-constants: review
+  1-2-protocol-spec-md-and-mirrored-constants: done
   1-3-gate-v1-hands-off-screen-on-feasibility-hardware: backlog
   1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware: backlog
   1-5-gate-v3-chunk-size-calibration-hardware: backlog

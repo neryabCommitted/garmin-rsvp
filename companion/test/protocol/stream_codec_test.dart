@@ -93,6 +93,43 @@ void main() {
         throwsArgumentError,
       );
     });
+
+    test('rejects flags that do not fit u8 (would truncate on the wire)', () {
+      // 0x100 & flagsReservedMask == 0, so only a u8 range check catches it.
+      for (final flags in [0x100, 0x107]) {
+        expect(
+          () => encodeChunk([
+            WordRecord(word: 'a', flags: flags, orpPivot: 0, bonusMs: 0),
+          ]),
+          throwsArgumentError,
+          reason: 'flags=0x${flags.toRadixString(16)}',
+        );
+      }
+    });
+
+    test('rejects an empty record list (SPEC §4.2: n >= 1)', () {
+      expect(() => encodeChunk(const []), throwsArgumentError);
+    });
+
+    test('rejects a word with unpaired surrogates (would mutate to U+FFFD)',
+        () {
+      expect(
+        () => encodeChunk(
+          const [WordRecord(word: '\u{D800}a', flags: 0, orpPivot: 0, bonusMs: 0)],
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('rejects an orpPivot on a UTF-8 continuation byte (SPEC §5)', () {
+      // Byte 1 of שלום is 0xA9, mid-sequence — sender-side MUST.
+      expect(
+        () => encodeChunk(
+          const [WordRecord(word: 'שלום', flags: 0, orpPivot: 1, bonusMs: 0)],
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 
   group('decodeChunk (SPEC §5)', () {
@@ -162,11 +199,15 @@ void main() {
     });
 
     test('rejects reserved flag bits set (SPEC §6 degrade case)', () {
-      // 0x08 = continuation, reserved in v1.
-      expect(
-        () => decodeChunk(hexBytes('010800000041'), 1),
-        throwsA(isA<StreamDecodeException>()),
-      );
+      // Every reserved bit individually: 0x08 continuation, 0x10 rtl,
+      // and bits 5–7 (0xE0) — a reserved-mask typo must fail here.
+      for (final flags in ['08', '10', '20', '40', '80', 'e0']) {
+        expect(
+          () => decodeChunk(hexBytes('01${flags}00000041'), 1),
+          throwsA(isA<StreamDecodeException>()),
+          reason: 'flags=0x$flags',
+        );
+      }
     });
 
     test('rejects invalid UTF-8 word bytes', () {

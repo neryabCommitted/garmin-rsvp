@@ -60,19 +60,25 @@ module StreamDecoder {
                 return null; // truncated word bytes
             }
 
-            var word;
-            try {
-                word = StringUtil.convertEncodedString(
-                    payload.slice(pos + Protocol.RECORD_HEADER_BYTES, wordEnd), {
-                        :fromRepresentation => StringUtil.REPRESENTATION_BYTE_ARRAY,
-                        :toRepresentation => StringUtil.REPRESENTATION_STRING_PLAIN_TEXT,
-                        :encoding => StringUtil.CHAR_ENCODING_UTF8
-                    }) as String;
-            } catch (ex) {
-                return null; // invalid UTF-8 is a decode failure, not a crash (SPEC §5)
+            // Invalid UTF-8 is a decode failure, not a crash (SPEC §5).
+            // convertEncodedString cannot be trusted with bad input — on
+            // SDK 8.4.0 it dies with an UNCATCHABLE system error ("Failed
+            // invoking <symbol>") — so the bytes are validated structurally
+            // first and conversion only ever sees well-formed UTF-8.
+            var wordBytes = payload.slice(pos + Protocol.RECORD_HEADER_BYTES, wordEnd);
+            if (!isValidUtf8(wordBytes)) {
+                return null;
+            }
+            var decoded = StringUtil.convertEncodedString(wordBytes, {
+                :fromRepresentation => StringUtil.REPRESENTATION_BYTE_ARRAY,
+                :toRepresentation => StringUtil.REPRESENTATION_STRING_PLAIN_TEXT,
+                :encoding => StringUtil.CHAR_ENCODING_UTF8
+            });
+            if (!(decoded instanceof Lang.String)) {
+                return null; // conversion failed despite valid input
             }
 
-            records.add(new WordRecord(word, flags, orpPivot, bonusMs));
+            records.add(new WordRecord(decoded as String, flags, orpPivot, bonusMs));
             pos = wordEnd;
         }
 
@@ -80,5 +86,50 @@ module StreamDecoder {
             return null; // SPEC §4.3: decoding must consume the payload exactly
         }
         return records;
+    }
+
+    // Structural UTF-8 validation (RFC 3629): correct lead/continuation
+    // bytes, no overlongs, no surrogates, max U+10FFFF. Required because
+    // StringUtil.convertEncodedString is not safe on malformed input.
+    function isValidUtf8(bytes as ByteArray) as Boolean {
+        var i = 0;
+        var size = bytes.size();
+        while (i < size) {
+            var b = bytes[i] as Number;
+            var len;
+            if (b <= 0x7F) {
+                len = 1;
+            } else if (b >= 0xC2 && b <= 0xDF) {
+                len = 2;
+            } else if (b >= 0xE0 && b <= 0xEF) {
+                len = 3;
+            } else if (b >= 0xF0 && b <= 0xF4) {
+                len = 4;
+            } else {
+                return false; // stray continuation byte or invalid lead
+            }
+            if (i + len > size) {
+                return false; // truncated sequence
+            }
+            for (var j = 1; j < len; j++) {
+                var c = bytes[i + j] as Number;
+                if (c < 0x80 || c > 0xBF) {
+                    return false; // not a continuation byte
+                }
+            }
+            if (len == 3) {
+                var c1 = bytes[i + 1] as Number;
+                if ((b == 0xE0 && c1 < 0xA0) || (b == 0xED && c1 > 0x9F)) {
+                    return false; // overlong / UTF-16 surrogate range
+                }
+            } else if (len == 4) {
+                var c1 = bytes[i + 1] as Number;
+                if ((b == 0xF0 && c1 < 0x90) || (b == 0xF4 && c1 > 0x8F)) {
+                    return false; // overlong / above U+10FFFF
+                }
+            }
+            i += len;
+        }
+        return true;
     }
 }

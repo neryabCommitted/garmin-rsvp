@@ -54,6 +54,8 @@ void main() {
     expect(ProtocolKeys.flagContinuation, 0x08);
     expect(ProtocolKeys.flagRtl, 0x10);
     expect(ProtocolKeys.flagsReservedMask, 0xF8);
+    expect(ProtocolKeys.recordHeaderBytes, 5);
+    expect(ProtocolKeys.fingerprintLength, 8);
     expect(ProtocolKeys.errVersionMismatch, 'versionMismatch');
     expect(ProtocolKeys.errUnknownType, 'unknownType');
     expect(ProtocolKeys.errMalformedEnvelope, 'malformedEnvelope');
@@ -356,9 +358,195 @@ void main() {
       ];
       for (final raw in examples) {
         final envelope = decodeEnvelope(raw);
-        expect(envelope.type, raw['t']);
-        expect(envelope.version, 1);
+        final reason = 'type=${raw['t']}';
+        expect(envelope.type, raw['t'], reason: reason);
+        expect(envelope.version, 1, reason: reason);
+        expect(envelope.fingerprint, raw['fp'], reason: reason);
+        expect(envelope.offset, raw['off'], reason: reason);
+        expect(envelope.count, raw['n'], reason: reason);
+        expect(envelope.payload, raw['p'], reason: reason);
       }
+    });
+
+    test('negative off is rejected (SPEC §3)', () {
+      final raw = exampleChunkRequest()..['off'] = -5;
+      expect(
+        () => decodeEnvelope(raw),
+        throwsA(
+          isA<EnvelopeException>().having(
+            (e) => e.code,
+            'code',
+            ProtocolKeys.errMalformedEnvelope,
+          ),
+        ),
+      );
+    });
+
+    test('n < 1 is rejected (SPEC §3 / §4.2)', () {
+      for (final n in [0, -3]) {
+        final raw = exampleChunkRequest()..['n'] = n;
+        expect(
+          () => decodeEnvelope(raw),
+          throwsA(
+            isA<EnvelopeException>().having(
+              (e) => e.code,
+              'code',
+              ProtocolKeys.errMalformedEnvelope,
+            ),
+          ),
+          reason: 'n=$n',
+        );
+      }
+    });
+
+    test('non-null value in an unused field is rejected (SPEC §3)', () {
+      // manifest does not use n; chunkRequest does not use p.
+      final manifest = manifestEnvelope(
+        fingerprint: '9f86d081',
+        title: 'Example Book',
+        totalWords: 50000,
+        totalBonusMs: 412350,
+        chapters: const [ChapterEntry(offset: 0, title: 'C1', cumBonusMs: 0)],
+      )..['n'] = 7;
+      final request = exampleChunkRequest()..['p'] = <String, Object?>{};
+      for (final raw in [manifest, request]) {
+        expect(
+          () => decodeEnvelope(raw),
+          throwsA(
+            isA<EnvelopeException>().having(
+              (e) => e.code,
+              'code',
+              ProtocolKeys.errMalformedEnvelope,
+            ),
+          ),
+          reason: 'type=${raw['t']}',
+        );
+      }
+    });
+
+    test('payload fields must carry their declared types (SPEC §4)', () {
+      final badPosition = <String, Object?>{
+        't': 'position',
+        'v': 1,
+        'fp': '9f86d081',
+        'off': 1002,
+        'p': <String, Object?>{'ts': 'noon', 'src': 42},
+      };
+      final badManifest = <String, Object?>{
+        't': 'manifest',
+        'v': 1,
+        'fp': '9f86d081',
+        'p': <String, Object?>{
+          'ti': 'Book',
+          'tw': 'fifty',
+          'tb': 0,
+          'ch': <Object?>[
+            <String, Object?>{'o': 0, 'ti': 'C1', 'cb': 0},
+          ],
+        },
+      };
+      final badError = <String, Object?>{
+        't': 'error',
+        'v': 1,
+        'p': <String, Object?>{'c': 42},
+      };
+      for (final raw in [badPosition, badManifest, badError]) {
+        expect(
+          () => decodeEnvelope(raw),
+          throwsA(
+            isA<EnvelopeException>().having(
+              (e) => e.code,
+              'code',
+              ProtocolKeys.errMalformedEnvelope,
+            ),
+          ),
+          reason: 'type=${raw['t']}',
+        );
+      }
+    });
+
+    test('manifest with an empty chapter list is rejected (SPEC §4.1)', () {
+      final raw = <String, Object?>{
+        't': 'manifest',
+        'v': 1,
+        'fp': '9f86d081',
+        'p': <String, Object?>{
+          'ti': 'Book',
+          'tw': 50000,
+          'tb': 412350,
+          'ch': <Object?>[],
+        },
+      };
+      expect(
+        () => decodeEnvelope(raw),
+        throwsA(
+          isA<EnvelopeException>().having(
+            (e) => e.code,
+            'code',
+            ProtocolKeys.errMalformedEnvelope,
+          ),
+        ),
+      );
+    });
+  });
+
+  group('builders reject wire-invalid input (SPEC §3/§4/§7)', () {
+    test('malformed fingerprint', () {
+      expect(
+        () => chunkRequestEnvelope(
+          fingerprint: 'NOT-HEX!',
+          offset: 1000,
+          count: 3,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('negative offset', () {
+      expect(
+        () => chunkRequestEnvelope(
+          fingerprint: '9f86d081',
+          offset: -1,
+          count: 3,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('count < 1', () {
+      expect(
+        () => chunkRequestEnvelope(
+          fingerprint: '9f86d081',
+          offset: 1000,
+          count: 0,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('manifest with no chapters', () {
+      expect(
+        () => manifestEnvelope(
+          fingerprint: '9f86d081',
+          title: 'Book',
+          totalWords: 50000,
+          totalBonusMs: 412350,
+          chapters: const [],
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('chunkData whose n disagrees with the payload record count', () {
+      expect(
+        () => chunkDataEnvelope(
+          fingerprint: '9f86d081',
+          offset: 1000,
+          count: 5,
+          payload: exampleChunkBytes,
+        ),
+        throwsArgumentError,
+      );
     });
   });
 }

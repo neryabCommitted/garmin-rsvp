@@ -64,9 +64,46 @@ final class StreamDecodeException implements Exception {
 ///
 /// Throws [ArgumentError] for records the wire format cannot carry — that is
 /// a phone-side baking bug, not a protocol error.
+/// True when [s] contains no unpaired UTF-16 surrogates — i.e. `utf8.encode`
+/// will round-trip it instead of substituting U+FFFD.
+bool _isWellFormedUtf16(String s) {
+  for (var i = 0; i < s.length; i++) {
+    final unit = s.codeUnitAt(i);
+    if (unit >= 0xD800 && unit <= 0xDBFF) {
+      if (i + 1 >= s.length) {
+        return false;
+      }
+      final next = s.codeUnitAt(i + 1);
+      if (next < 0xDC00 || next > 0xDFFF) {
+        return false;
+      }
+      i++;
+    } else if (unit >= 0xDC00 && unit <= 0xDFFF) {
+      return false;
+    }
+  }
+  return true;
+}
+
 Uint8List encodeChunk(List<WordRecord> records) {
+  if (records.isEmpty) {
+    throw ArgumentError.value(
+      records,
+      'records',
+      'SPEC §4.2: a chunk carries n >= 1 records; an empty payload is '
+          'wire-invalid',
+    );
+  }
   final builder = BytesBuilder(copy: false);
   for (final record in records) {
+    if (!_isWellFormedUtf16(record.word)) {
+      throw ArgumentError.value(
+        record.word,
+        'records',
+        'SPEC §5: word contains unpaired surrogates — UTF-8 encoding would '
+            'silently mutate it',
+      );
+    }
     final wordBytes = utf8.encode(record.word);
     if (wordBytes.isEmpty || wordBytes.length > 255) {
       throw ArgumentError.value(
@@ -82,6 +119,16 @@ Uint8List encodeChunk(List<WordRecord> records) {
         'SPEC §5: orpPivot must be a byte index < wordLen',
       );
     }
+    // SPEC §5: the boundary requirement is enforced here, at encode time —
+    // decoders deliberately do not check it.
+    if (wordBytes[record.orpPivot] & 0xC0 == 0x80) {
+      throw ArgumentError.value(
+        record.orpPivot,
+        'records',
+        'SPEC §5: orpPivot must point at the first byte of a UTF-8 sequence, '
+            'not a continuation byte',
+      );
+    }
     if (record.bonusMs < 0 || record.bonusMs > 0xFFFF) {
       throw ArgumentError.value(
         record.bonusMs,
@@ -89,12 +136,13 @@ Uint8List encodeChunk(List<WordRecord> records) {
         'SPEC §5: bonusMs must fit u16',
       );
     }
-    if (record.flags & ProtocolKeys.flagsReservedMask != 0 ||
-        record.flags < 0) {
+    if (record.flags < 0 ||
+        record.flags > 0xFF ||
+        record.flags & ProtocolKeys.flagsReservedMask != 0) {
       throw ArgumentError.value(
         record.flags,
         'records',
-        'SPEC §6: reserved flag bits must be 0 in v1',
+        'SPEC §6: flags must fit u8 with reserved bits 0 in v1',
       );
     }
 

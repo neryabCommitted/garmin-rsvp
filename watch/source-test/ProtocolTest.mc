@@ -104,6 +104,9 @@ function protocolConstantsMatchSpec(logger as Test.Logger) as Boolean {
     if (Protocol.FLAG_CONTINUATION != 0x08) { logger.error("FLAG_CONTINUATION"); return false; }
     if (Protocol.FLAG_RTL != 0x10) { logger.error("FLAG_RTL"); return false; }
     if (Protocol.FLAGS_RESERVED_MASK != 0xF8) { logger.error("FLAGS_RESERVED_MASK"); return false; }
+    // SPEC §5 / §7 numeric constants
+    if (Protocol.RECORD_HEADER_BYTES != 5) { logger.error("RECORD_HEADER_BYTES"); return false; }
+    if (Protocol.FINGERPRINT_LENGTH != 8) { logger.error("FINGERPRINT_LENGTH"); return false; }
     // SPEC §8 error codes
     if (!Protocol.ERR_VERSION_MISMATCH.equals("versionMismatch")) { logger.error("ERR_VERSION_MISMATCH"); return false; }
     if (!Protocol.ERR_UNKNOWN_TYPE.equals("unknownType")) { logger.error("ERR_UNKNOWN_TYPE"); return false; }
@@ -192,13 +195,164 @@ function streamDecoderRejectsMalformedInput(logger as Test.Logger) as Boolean {
     if (StreamDecoder.decodeChunk([0x01, 0x00, 0x01, 0x00, 0x00, 0x41]b, 1) != null) {
         logger.error("out-of-range pivot accepted"); return false;
     }
-    // Reserved flag bits set (SPEC §6): 0x08 continuation is reserved in v1.
-    if (StreamDecoder.decodeChunk([0x01, 0x08, 0x00, 0x00, 0x00, 0x41]b, 1) != null) {
-        logger.error("reserved flag bits accepted"); return false;
+    // Reserved flag bits set (SPEC §6): every reserved bit individually —
+    // 0x08 continuation, 0x10 rtl, and bits 5–7 — so a mask typo fails here.
+    var reservedFlags = [0x08, 0x10, 0x20, 0x40, 0x80, 0xE0];
+    for (var i = 0; i < reservedFlags.size(); i++) {
+        var probe = [0x01, 0x00, 0x00, 0x00, 0x00, 0x41]b;
+        probe[1] = reservedFlags[i] as Number;
+        if (StreamDecoder.decodeChunk(probe, 1) != null) {
+            logger.error("reserved flag bits accepted"); return false;
+        }
+    }
+    // Invalid UTF-8 word bytes (SPEC §5): lone continuation byte 0x80 —
+    // same probe as the companion's "rejects invalid UTF-8" test.
+    if (StreamDecoder.decodeChunk([0x01, 0x00, 0x00, 0x00, 0x00, 0x80]b, 1) != null) {
+        logger.error("invalid UTF-8 accepted"); return false;
     }
     // n < 1 is invalid.
     if (StreamDecoder.decodeChunk([]b, 0) != null) {
         logger.error("n=0 accepted"); return false;
+    }
+    return true;
+}
+
+// ── SPEC §3 step 3: structure validation mirrors the companion (AC2/AC4) ────
+
+(:test)
+function envelopeStructureIsValidated(logger as Test.Logger) as Boolean {
+    // Valid envelopes per protocol/examples/envelopes.md are accepted.
+    var manifest = {
+        "t" => Protocol.MSG_MANIFEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "p" => {
+            "ti" => "Example Book",
+            "tw" => 50000,
+            "tb" => 412350,
+            "ch" => [
+                { "o" => 0, "ti" => "Chapter 1", "cb" => 0 },
+                { "o" => 1000, "ti" => "Chapter 2", "cb" => 8350 }
+            ]
+        }
+    };
+    if (Protocol.validateEnvelope(manifest) != null) {
+        logger.error("valid manifest rejected"); return false;
+    }
+    var position = {
+        "t" => Protocol.MSG_POSITION,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "off" => 1002,
+        "p" => { "ts" => 1781049600, "src" => Protocol.SRC_WATCH }
+    };
+    if (Protocol.validateEnvelope(position) != null) {
+        logger.error("valid position rejected"); return false;
+    }
+    var errorMsg = {
+        "t" => Protocol.MSG_ERROR,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "p" => { "c" => Protocol.ERR_DECODE_FAILURE }
+    };
+    if (Protocol.validateEnvelope(errorMsg) != null) {
+        logger.error("valid error rejected"); return false;
+    }
+
+    // Missing required fields → malformedEnvelope (SPEC §3 step 3).
+    var bareChunkData = {
+        "t" => Protocol.MSG_CHUNK_DATA,
+        "v" => Protocol.PROTOCOL_VERSION
+    };
+    var verdict = Protocol.validateEnvelope(bareChunkData);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("chunkData without fp/off/n/p accepted"); return false;
+    }
+
+    // Unknown top-level key → malformedEnvelope (SPEC §3).
+    var extraKey = {
+        "t" => Protocol.MSG_CHUNK_REQUEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "off" => 1000,
+        "n" => 3,
+        "x" => 1
+    };
+    verdict = Protocol.validateEnvelope(extraKey);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("unknown key accepted"); return false;
+    }
+
+    // Malformed fingerprint shape → malformedEnvelope (SPEC §7).
+    var badFp = {
+        "t" => Protocol.MSG_CHUNK_REQUEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9F86D081",
+        "off" => 1000,
+        "n" => 3
+    };
+    verdict = Protocol.validateEnvelope(badFp);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("uppercase fingerprint accepted"); return false;
+    }
+
+    // Non-null value in an unused field → malformedEnvelope (SPEC §3).
+    var manifestWithN = {
+        "t" => Protocol.MSG_MANIFEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "n" => 7,
+        "p" => manifest["p"]
+    };
+    verdict = Protocol.validateEnvelope(manifestWithN);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("manifest carrying n accepted"); return false;
+    }
+
+    // Out-of-range off / n → malformedEnvelope (SPEC §3).
+    var negativeOff = {
+        "t" => Protocol.MSG_CHUNK_REQUEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "off" => -5,
+        "n" => 3
+    };
+    verdict = Protocol.validateEnvelope(negativeOff);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("off=-5 accepted"); return false;
+    }
+    var zeroN = {
+        "t" => Protocol.MSG_CHUNK_REQUEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "off" => 1000,
+        "n" => 0
+    };
+    verdict = Protocol.validateEnvelope(zeroN);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("n=0 accepted"); return false;
+    }
+
+    // Payload structure per SPEC §4: empty ch and wrong-kind ts rejected.
+    var emptyChapters = {
+        "t" => Protocol.MSG_MANIFEST,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "p" => { "ti" => "Book", "tw" => 50000, "tb" => 412350, "ch" => [] }
+    };
+    verdict = Protocol.validateEnvelope(emptyChapters);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("empty ch accepted"); return false;
+    }
+    var stringTs = {
+        "t" => Protocol.MSG_POSITION,
+        "v" => Protocol.PROTOCOL_VERSION,
+        "fp" => "9f86d081",
+        "off" => 1002,
+        "p" => { "ts" => "noon", "src" => Protocol.SRC_WATCH }
+    };
+    verdict = Protocol.validateEnvelope(stringTs);
+    if (verdict == null || !verdict.equals(Protocol.ERR_MALFORMED_ENVELOPE)) {
+        logger.error("string ts accepted"); return false;
     }
     return true;
 }
