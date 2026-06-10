@@ -33,18 +33,29 @@ SDK=~/.Garmin/ConnectIQ/Sdks/connectiq-sdk-lin-9.1.0-2026-03-09-6a872a80b
 ### Run on hardware (preferred over the simulator)
 
 Per architecture **AR15**, sideload to the real Fenix 8 early (the simulator misreports
-memory/watchdog). Connect the watch by USB and copy the build into its app folder:
+memory/watchdog). Verified end-to-end on the Fenix 8 47 mm on 2026-06-10.
+
+**One-time watch setting:** the MTP switch is driven entirely by the watch — the host
+cannot trigger it. `091e:0003` is the watch's "Garmin" (vendor protocol) USB mode. On the
+watch: hold the middle-left button → **Watch Settings → System → Advanced → USB Mode →
+MTP**. (In Garmin mode the watch instead asks per-connection whether to enter MTP, and any
+open on-watch dialog blocks the switch.)
+
+In MTP mode the watch enumerates as `091e:51b8` (Fenix 8 AMOLED) and GNOME's gvfs
+auto-mounts it — the stock Ubuntu 24.04 `libmtp` 1.1.21 predates the Fenix 8 device IDs
+(added in libmtp 1.1.23), so tools may label it "UNKNOWN device", but mounting and
+transfers work fine. Sideload:
 
 ```bash
-cp watch/bin/PaceTurner.prg "<FENIX8_MOUNT>/GARMIN/APPS/"
+# <serial> is the watch's USB serial, e.g. 0000d7710494 — tab-complete the gvfs dir
+gio copy watch/bin/PaceTurner.prg \
+  "/run/user/$UID/gvfs/mtp:host=091e_51b8_<serial>/Internal Storage/GARMIN/Apps/"
+gio mount -u "mtp://091e_51b8_<serial>/"
 ```
 
-> **Known issue (Ubuntu 24.04):** the Fenix 8 enumerates in Garmin's vendor-specific
-> USB mode (`091e:0003`, interface class 255) and does not reliably switch to MTP for
-> `libmtp`, so no `GARMIN/` volume mounts for the copy above. To be sorted alongside the
-> hardware gate stories (1.3–1.5) — likely a `libmtp`/udev update or Garmin's own tooling.
-> Until then, validate the build via the simulator (the CI `action-connectiq-tester` run
-> builds and runs it).
+Unplug the watch — it installs sideloaded apps on disconnect; the app then appears in the
+activity list. Full diagnosis trail:
+`_bmad-output/implementation-artifacts/investigations/fenix8-mtp-sideload-investigation.md`.
 
 > The CIQ GUI tools (SDK Manager, simulator) don't run natively on Ubuntu 24.04 (they need
 > 22.04-era libs). The SDK was downloaded by running the official SDK Manager inside an

@@ -4,6 +4,10 @@ Single status page for the four hardware-feasibility gates on the real Fenix 8.
 Gate-blocked work (hardening the playback/transfer designs, story-splitting their epics)
 references this page. See architecture §"Validation gates" (AR27–AR31).
 
+> **Hardware access unblocked (2026-06-10):** USB sideload to the real Fenix 8 works
+> (watch-side USB Mode → MTP; procedure in [setup.md](setup.md)). Story 1.1's scaffold
+> was sideloaded and ran on the watch. The gates below can now run on hardware.
+
 | Gate | What it proves | Status | Result |
 |------|----------------|--------|--------|
 | **V1** | AMOLED screen-on for ≥60-min hands-off reading (+ dim-AON fallback legibility) | not started | — |
