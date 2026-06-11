@@ -40,10 +40,11 @@ transition log persisted to Storage, exported via println on next launch.
 ("pretty good"). Dedicated outdoor/direct-sun judgment not performed — carry as a UX
 spot-check into Epic 3; does not affect the verdict.
 
-**Notes.** Battery: 28% start, no observed drop at end (read 32% after ~3 min on USB charger) —
-≈0% net drain; the real measurement is gate V4 (Story 3.9). Backlight probe: a single
-`Attention.backlight(true)` call mid-dim returned without `BacklightOnTooLongException`;
-sustained use untested — not a pass path.
+**Notes.** Battery: 28% start; end-of-run drain **not measured** — the only post-run reading
+(32%) was taken after ~3 min on a USB charger and is unusable. The real measurement is gate V4
+(Story 3.9). Backlight probe: a single `Attention.backlight(true)` call mid-dim, pressed
+**after the 60-min hands-off window** (not a candidate cause for the in-run HIGH blips),
+returned without `BacklightOnTooLongException`; sustained use untested — not a pass path.
 
 **Verdict matrix** (observed row in bold):
 

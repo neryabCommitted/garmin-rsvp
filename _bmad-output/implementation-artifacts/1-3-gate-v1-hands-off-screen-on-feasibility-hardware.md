@@ -4,7 +4,7 @@ baseline_commit: ebde7b8655d9acf1d1a9fdc312089e9719c1aa1a
 
 # Story 1.3: Gate V1 — hands-off screen-on feasibility (hardware)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -43,16 +43,23 @@ So that the playback epic's core premise (FR4) is validated before it hardens.
 - [x] Task 2: Primary-path hardware run — activity session, hands-off 60 min (AC: 1) — **human-in-the-loop**
   - [x] Sideload per `docs/setup.md` (USB Mode → MTP, `gio copy`, unplug to install).
   - [x] **Hand off to Nerya:** set watch **Settings → System → Display & Brightness → During Activity → Always On** (hard prerequisite — with it Off the screen goes black after timeout for native and CIQ activities alike). Note the General Use AOD setting too. Launch app, press START to begin the session, place the watch where it's glanceable, no interaction for 60 min.
-  - [x] Record: did the display stay lit the full 60 min; at what elapsed time did it drop HIGH→LOW (expect ~15 s, firmware-dependent); was the dimmed word legible at arm's length; did a single button press restore full brightness (FR4's "restored by one button press"); battery % at start/end (free early signal for V4 — not the gate).
+  - [x] Record: did the display stay lit the full 60 min; at what elapsed time did it drop HIGH→LOW (expect ~15 s, firmware-dependent); was the dimmed word legible at arm's length; did a single button press restore full brightness (FR4's "restored by one button press"); battery % at start/end (free early signal for V4 — not the gate). _(Partial: end reading invalid — taken after ~3 min on USB charge; drain not measured. Recorded as such in gates.md.)_
   - [x] Pull the display-mode log from Storage (re-open app or read via println on next launch) and keep the transition timeline for `docs/gates.md`.
 - [x] Task 3: Fallback-path legibility test (AC: 2) — **human-in-the-loop**
-  - [x] In the dimmed (LOW display mode) state, judge the single bright word's legibility: indoor + outdoor light, arm's length, the UX-DR1 Ink-on-Void palette. Record legible / not-legible per condition.
+  - [x] In the dimmed (LOW display mode) state, judge the single bright word's legibility: indoor + outdoor light, arm's length, the UX-DR1 Ink-on-Void palette. Record legible / not-legible per condition. _(Partial: indoor done — legible; outdoor NOT performed, carried to Epic 3 UX as a spot-check.)_
   - [x] Optionally probe `Attention.backlight(true)` in a `try/catch` for `BacklightOnTooLongException` to document its actual ceiling on Fenix 8 — research says it extends but cannot sustain the display on burn-in-protected devices; this only feeds the gates.md notes, it is not a pass path.
 - [x] Task 4: Record the verdict (AC: 3)
   - [x] Update `docs/gates.md`: V1 table row + §V1 section — status (passed / passed-dim / failed), method (activity session + During-Activity-AOD setting), the measured timeline (dim onset, 60-min outcome), fallback legibility result, and the product implication (the app must instruct users to enable the During-Activity AOD setting — carry to Epic 3).
   - [x] If primary AND fallback both fail: raise the premise-rework flag explicitly in gates.md and stop — Epic 3's playback design must not harden (architecture: FR4 is gate-conditional, R1). _(N/A — V1 passed-dim; flag explicitly recorded as not raised.)_
   - [x] Record the DisplayStrategy implication for Epic 3 (which path `ActivitySessionStrategy.mc` will implement; gate outcome swaps a module, not the architecture — architecture §Frontend Architecture).
   - [x] Update sprint-status: `1-3-gate-v1-hands-off-screen-on-feasibility-hardware` → done (after review). _(Set to `review` per dev-story workflow; the code-review workflow flips it to `done`.)_
+
+### Review Findings
+
+- [x] [Review][Decision] Backlight-probe timing contradicts the "no interaction for 60 min" claim — Dev Agent Record says the probe fired "mid-dim" (an UP press = an interaction, which wakes the display HIGH for the timeout window — plausibly one of the two ~8 s HIGH blips at 39:54/58:23). _Resolved (Nerya, 2026-06-11): probe was pressed AFTER the 60-min window — hands-off claim stands; gates.md clarified; blips remain cause-unconfirmed._
+- [x] [Review][Patch] gates.md asserts "≈0% net drain" from an invalid measurement — end reading (32%) was taken after ~3 min on USB charge; no valid end-of-run value exists. Reword to "not measured". [docs/gates.md] _Applied._
+- [x] [Review][Patch] Over-claimed checkboxes — Task 3 subtask 1 is `[x]` but outdoor legibility was not performed; Task 2 battery subtask is `[x]` but the end reading is unusable; File List calls this story file "modified" (it is new in this diff). Annotate honestly. [this file] _Applied._
+- [x] [Review][Defer] Spike-robustness bundle — patterns that must NOT carry into Epic 3 `ActivitySessionStrategy`: `session.start()` Boolean ignored (silent fake-active session — the one failure that invalidates the gate's premise undetected); `createSession` `InvalidOptionsException` uncaught (crash on START); `Storage.setValue` unguarded inside `onDisplayModeChanged` (a mode transition could crash the run it records); evidence log appends outside an active session (pre-session dim clobbers the previous run's Storage copy; post-stop entries with a stale anchor — the `startSession` comment overpromises "covers exactly this run"); type-narrowed `catch (e instanceof BacklightOnTooLongException)` lets other throws escape a button handler; unbounded `_modeLog` growth; no debounce on START toggle despite Dev Notes' own rapid-cycle freeze warning; `System.getTimer()` wrap → negative elapsed. [watch/source/PaceTurnerApp.mc] — deferred: disposable spike, run complete, spec's no-gold-plate rule; recorded in deferred-work.md for Epic 3.
 
 ## Dev Notes
 
@@ -152,7 +159,7 @@ claude-fable-5 (Amelia / bmad-dev-story)
 - Optional Task-3 probe implemented on UP (`onPreviousPage`): `Attention.backlight(true)` guarded by `has :backlight`, catching `BacklightOnTooLongException`; result renders next to the mode label (`BL on`/`BL exc`/`BL n/a`).
 - Sideload the **normal** build (`watch/bin/PaceTurner.prg`) for the hardware run — release strips nothing needed, but normal keeps debug symbols for any crash triage.
 - Tasks 2–3 hardware run executed by Nerya 2026-06-11 (watch off-wrist on table, passcode disabled, During-Activity AOD = Always On). Agent did the MTP file work both ways (planted `GARMIN/Apps/LOGS/PaceTurner.TXT`, sideloaded the PRG, pulled the evidence log post-run).
-- **Hardware results (Tasks 2–3):** dim onset HIGH→LOW at 00:14; LOW continuously thereafter; display never reached OFF in 61:00 (objective `onDisplayModeChanged` log). Two ~8 s HIGH blips at 39:54 / 58:23, cause unconfirmed (possible table bump or phone notification), both self-recovered to LOW. One button press restored full brightness (FR4 restore ✓). Dim word legible at arm's length in indoor daylight; outdoor judgment not performed — carried to Epic 3 UX as a spot-check, verdict unaffected. Battery 28% start, no observed drop (32% read after ~3 min on USB charge). Backlight probe: single `Attention.backlight(true)` returned without exception (`BL on`); sustained use untested.
+- **Hardware results (Tasks 2–3):** dim onset HIGH→LOW at 00:14; LOW continuously thereafter; display never reached OFF in 61:00 (objective `onDisplayModeChanged` log). Two ~8 s HIGH blips at 39:54 / 58:23, cause unconfirmed (possible table bump or phone notification), both self-recovered to LOW. One button press restored full brightness (FR4 restore ✓). Dim word legible at arm's length in indoor daylight; outdoor judgment not performed — carried to Epic 3 UX as a spot-check, verdict unaffected. Battery 28% start; end-of-run drain not measured (only post-run reading, 32%, taken after ~3 min on USB charge — unusable). Backlight probe: single `Attention.backlight(true)` pressed after the 60-min hands-off window returned without exception (`BL on`); sustained use untested.
 - Raw evidence timeline (elapsed-seconds:mode; 0=HIGH 1=LOW 2=OFF): `0:0,0:0,14:1,2394:0,2402:1,3503:0,3511:1,3604:0,3612:1,3617:0,3632:1,3640:0,3640:0,3648:1,3660:0` — also preserved in `/tmp/PaceTurner-run1.TXT` during the session and transcribed to `docs/gates.md`.
 - **Task 4 verdict: V1 passed-dim** (matrix row 1) — FR4 satisfied in its sanctioned fallback form. `docs/gates.md` updated (table row + full §V1: method, timeline, legibility, notes, pinned verdict matrix, Epic 3 implication: `ActivitySessionStrategy` = activity session + During-Activity-AOD user instruction). Premise-rework flag explicitly not raised.
 
@@ -166,8 +173,9 @@ claude-fable-5 (Amelia / bmad-dev-story)
 - `watch/source-test/GateV1Test.mc` (new — 3 `(:test)` functions for the pure helpers)
 - `docs/gates.md` (modified — V1 verdict: passed-dim, method, timeline, Epic 3 implication)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified — 1-3 → review)
-- `_bmad-output/implementation-artifacts/1-3-gate-v1-hands-off-screen-on-feasibility-hardware.md` (modified — this record)
+- `_bmad-output/implementation-artifacts/1-3-gate-v1-hands-off-screen-on-feasibility-hardware.md` (new — this record)
 
 ## Change Log
 
 - 2026-06-11: Story 1.3 implemented and hardware-validated. V1 spike (GateV1View/Delegate, session lifecycle + display-mode evidence log in PaceTurnerApp, Fit permission); 60-min hands-off run on real Fenix 8 → **V1 passed-dim**; verdict + Epic 3 DisplayStrategy implication recorded in `docs/gates.md`. Status → review.
+- 2026-06-11: Code review (3 layers: blind / edge / auditor). Verdict passed-dim upheld. Patches applied: gates.md battery claim corrected to "not measured", backlight-probe timing pinned after the 60-min window, honest checkbox annotations. Spike-robustness bundle deferred to Epic 3 (`deferred-work.md`). Status → done.
