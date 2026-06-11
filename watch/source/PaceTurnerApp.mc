@@ -1,121 +1,150 @@
-import Toybox.Activity;
-import Toybox.ActivityRecording;
 import Toybox.Application;
 import Toybox.Application.Storage;
-import Toybox.Attention;
+import Toybox.Communications;
 import Toybox.Lang;
 import Toybox.System;
 import Toybox.WatchUi;
 
+// Gate V2 spike app (Story 1.4): receives chunkData envelopes from the
+// companion, validates + decodes them with the existing protocol modules,
+// acks every valid chunk back to the phone, and exposes live counters to
+// GateV2View. The V1 session spike is retired (git preserves it). Temporary
+// spike code — Epic 4's ProtocolClient supersedes the receive path.
 class PaceTurnerApp extends Application.AppBase {
 
-    // Single temporary Storage key for the Gate V1 evidence log (Story 1.3);
-    // the shared StorageKeys module is an Epic 4 deliverable.
-    private const EVIDENCE_KEY = "gateV1DisplayModeLog";
+    // Single temporary Storage key for the previous run's compact evidence
+    // string; the shared StorageKeys module is an Epic 4 deliverable.
+    private const EVIDENCE_KEY = "gateV2RunLog";
 
-    private var _session as ActivityRecording.Session?;
-    private var _anchorMs as Number;               // System.getTimer() at session start
-    private var _modeLog as Array<Array<Number> >; // [elapsedSeconds, DisplayMode] entries
-    private var _backlightProbe as String?;        // optional Task-3 probe result
+    private var _received as Number;
+    private var _valid as Number;
+    private var _invalid as Number;
+    private var _acked as Number;
+    private var _ackErrors as Number;
+    private var _lastError as String?;
+    private var _lastEncoding as String;
 
     function initialize() {
         AppBase.initialize();
-        _session = null;
-        _anchorMs = System.getTimer();
-        _modeLog = [] as Array<Array<Number> >;
-        _backlightProbe = null;
+        _received = 0;
+        _valid = 0;
+        _invalid = 0;
+        _acked = 0;
+        _ackErrors = 0;
+        _lastError = null;
+        _lastEncoding = "?";
     }
 
     function onStart(state as Dictionary?) as Void {
         // Surface the previous run's evidence on launch — readable from the
         // device app log without extra UI (run protocol, docs/gates.md).
-        var previous = Storage.getValue(EVIDENCE_KEY);
+        var previous = null;
+        try {
+            previous = Storage.getValue(EVIDENCE_KEY);
+        } catch (e) {
+            previous = null;
+        }
         if (previous != null) {
-            System.println("GateV1 evidence (previous run):");
+            System.println("GateV2 evidence (previous run):");
             System.println(previous);
         }
+        Communications.registerForPhoneAppMessages(method(:onPhoneMessage));
     }
 
     function onStop(state as Dictionary?) as Void {
-        stopSession();
-    }
-
-    // API 5.0.0 — the objective record of HIGH→LOW→OFF transitions across the
-    // 60-min hands-off run. Persisted on every change; no per-second logging
-    // (architecture §Communication Patterns logging budget).
-    function onDisplayModeChanged() as Void {
-        _modeLog.add([elapsedSeconds(), System.getDisplayMode() as Number]);
-        persistLog();
+        // Guarded Storage write — a persistence failure must not crash exit
+        // and destroy the run's evidence (deferred-work V1 robustness #3).
+        try {
+            Storage.setValue(EVIDENCE_KEY, GateV2.evidenceString(
+                _received, _valid, _invalid, _acked, _ackErrors,
+                _lastEncoding, _lastError));
+        } catch (e) {
+            System.println("GateV2: evidence persist failed");
+        }
     }
 
     function getInitialView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
-        return [new GateV1View(self), new GateV1Delegate(self)];
+        return [new GateV2View(self), new GateV2Delegate(self)];
     }
 
-    function isSessionActive() as Boolean {
-        return _session != null;
-    }
-
-    function elapsedSeconds() as Number {
-        return (System.getTimer() - _anchorMs) / 1000;
-    }
-
-    function backlightProbeResult() as String? {
-        return _backlightProbe;
-    }
-
-    // START toggles the session. Stop always discards — never save(), a spike
-    // run must not pollute Garmin Connect.
-    function toggleSession() as Void {
-        if (_session == null) {
-            startSession();
-        } else {
-            stopSession();
-        }
-    }
-
-    // Optional Task-3 probe: document Attention.backlight's actual ceiling on
-    // Fenix 8. Feeds the gates.md notes only — not a pass path.
-    function probeBacklight() as Void {
-        if (!(Attention has :backlight)) {
-            _backlightProbe = "BL n/a";
-            return;
-        }
+    // System callback for every phone message. Broad catch on purpose: this
+    // spike's receive callback must never crash the run it is recording
+    // (deferred-work V1 robustness #5). State is bounded counters plus two
+    // short strings — no growing in-memory log (#6) and no per-message
+    // logging or Storage writes in the hot path (logging budget; a mid-run
+    // Storage write would also pollute the round-trip timing the phone is
+    // measuring).
+    function onPhoneMessage(msg as Communications.PhoneAppMessage) as Void {
         try {
-            Attention.backlight(true);
-            _backlightProbe = "BL on";
-        } catch (e instanceof Attention.BacklightOnTooLongException) {
-            _backlightProbe = "BL exc";
-            System.println("GateV1 backlight probe: BacklightOnTooLongException");
+            _received++;
+            var result = GateV2.processMessage(msg.data);
+            _lastEncoding = result.enc;
+            if (result.ok && result.off != null) {
+                _valid++;
+                transmitAck(result.off as Number);
+            } else {
+                _invalid++;
+                _lastError = result.err;
+            }
+        } catch (e) {
+            _invalid++;
+            _lastError = "exc";
         }
     }
 
-    private function startSession() as Void {
-        var session = ActivityRecording.createSession({
-            :name => "PaceTurner",
-            :sport => Activity.SPORT_GENERIC,
-            :subSport => Activity.SUB_SPORT_GENERIC
-        });
-        session.start();
-        _session = session;
-        // Re-anchor the clock and start a fresh evidence log with a baseline
-        // entry, so the persisted record covers exactly this run.
-        _anchorMs = System.getTimer();
-        _modeLog = [[0, System.getDisplayMode() as Number]] as Array<Array<Number> >;
-        persistLog();
+    function onAckComplete() as Void {
+        _acked++;
     }
 
-    private function stopSession() as Void {
-        var session = _session;
-        if (session != null) {
-            session.stop();
-            session.discard();
-            _session = null;
-            persistLog();
-        }
+    function onAckError() as Void {
+        _ackErrors++;
+        _lastError = "ackFail";
     }
 
-    private function persistLog() as Void {
-        Storage.setValue(EVIDENCE_KEY, GateV1.logToString(_modeLog));
+    function receivedCount() as Number { return _received; }
+    function validCount() as Number { return _valid; }
+    function ackedCount() as Number { return _acked; }
+    function lastError() as String? { return _lastError; }
+    function lastEncoding() as String { return _lastEncoding; }
+
+    // START resets everything so Run A and Run B are measured separately.
+    function resetCounters() as Void {
+        _received = 0;
+        _valid = 0;
+        _invalid = 0;
+        _acked = 0;
+        _ackErrors = 0;
+        _lastError = null;
+        _lastEncoding = "?";
+    }
+
+    private function transmitAck(off as Number) as Void {
+        // Acks MUST be Dictionaries: the plugin's messageStream runs
+        // Map.from(e) on every inbound event and throws on bare values.
+        var ack = {
+            GateV2.ACK_KEY => off,
+            GateV2.ACK_OK_KEY => true
+        };
+        Communications.transmit(ack, null, new GateV2AckListener(self));
+    }
+}
+
+// Transmit listener for the spike's acks — counts watch→phone reliability
+// (free bonus evidence for Epic 4's position-sync channel).
+class GateV2AckListener extends Communications.ConnectionListener {
+
+    private var _app as PaceTurnerApp;
+
+    function initialize(app as PaceTurnerApp) {
+        ConnectionListener.initialize();
+        _app = app;
+    }
+
+    function onComplete() as Void {
+        _app.onAckComplete();
+    }
+
+    function onError() as Void {
+        _app.onAckError();
     }
 }
