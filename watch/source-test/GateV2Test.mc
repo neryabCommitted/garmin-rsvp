@@ -42,6 +42,40 @@ module GateV2TestSupport {
             "p" => transportPayload
         };
     }
+
+    // A large, well-formed SPEC §5 payload: n records of wordLen ASCII bytes
+    // each (flags 0, orpPivot 0, bonus 0). Built byte-exact so the fixture is
+    // always valid UTF-8 — convertEncodedString never sees malformed input
+    // (Story 1.2 lesson). Lets the gate V3 witness test cross a multi-KB chunk.
+    function largeChunk(n as Number, wordLen as Number) as ByteArray {
+        var recordBytes = Protocol.RECORD_HEADER_BYTES + wordLen;
+        var out = new [n * recordBytes]b;
+        var pos = 0;
+        for (var i = 0; i < n; i++) {
+            out.encodeNumber(wordLen, Lang.NUMBER_FORMAT_UINT8, {:offset => pos});
+            out.encodeNumber(0, Lang.NUMBER_FORMAT_UINT8, {:offset => pos + 1});
+            out.encodeNumber(0, Lang.NUMBER_FORMAT_UINT8, {:offset => pos + 2});
+            out.encodeNumber(0, Lang.NUMBER_FORMAT_UINT16,
+                {:offset => pos + 3, :endianness => Lang.ENDIAN_LITTLE});
+            for (var j = 0; j < wordLen; j++) {
+                out[pos + Protocol.RECORD_HEADER_BYTES + j] = (0x61 + ((i + j) % 26)) as Number;
+            }
+            pos += recordBytes;
+        }
+        return out;
+    }
+
+    // A valid chunkData envelope for an arbitrary record count.
+    function largeEnvelope(transportPayload as Object, n as Number) as Dictionary {
+        return {
+            "t" => Protocol.MSG_CHUNK_DATA,
+            "v" => Protocol.PROTOCOL_VERSION,
+            "fp" => "9f86d081",
+            "off" => 0,
+            "n" => n,
+            "p" => transportPayload
+        };
+    }
 }
 
 (:test)
@@ -196,6 +230,9 @@ function gateV2ProcessMessageStringPayloadTest(logger as Test.Logger) as Boolean
     if (r.off != 0) { logger.error("offset"); return false; }
     if (!r.enc.equals("String")) { logger.error("encoding label"); return false; }
     if (r.err != null) { logger.error("err set on success"); return false; }
+    if (r.bytesLen != payload.size()) {
+        logger.error("bytesLen witness: " + r.bytesLen); return false;
+    }
     return true;
 }
 
@@ -277,13 +314,46 @@ function gateV2CountsLineTest(logger as Test.Logger) as Boolean {
 (:test)
 function gateV2EvidenceStringTest(logger as Test.Logger) as Boolean {
     logger.debug("evidenceString: compact persisted form (String, not nested arrays)");
-    var s = GateV2.evidenceString(200, 199, 1, 198, 2, "String", Protocol.ERR_DECODE_FAILURE);
-    if (!s.equals("r:200,v:199,i:1,a:198,ae:2,enc:String,err:decodeFailure")) {
+    var s = GateV2.evidenceString(200, 199, 1, 198, 2, 9800, "String", Protocol.ERR_DECODE_FAILURE);
+    if (!s.equals("r:200,v:199,i:1,a:198,ae:2,md:9800,enc:String,err:decodeFailure")) {
         logger.error("formatted: " + s); return false;
     }
-    var clean = GateV2.evidenceString(5, 5, 0, 5, 0, "Array", null);
-    if (!clean.equals("r:5,v:5,i:0,a:5,ae:0,enc:Array,err:none")) {
+    var clean = GateV2.evidenceString(5, 5, 0, 5, 0, 32, "Array", null);
+    if (!clean.equals("r:5,v:5,i:0,a:5,ae:0,md:32,enc:Array,err:none")) {
         logger.error("clean run: " + clean); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2MaxDecodedLineTest(logger as Test.Logger) as Boolean {
+    logger.debug("maxDecodedLine: bounded witness display");
+    if (!GateV2.maxDecodedLine(0).equals("max:0B")) {
+        logger.error("zero"); return false;
+    }
+    if (!GateV2.maxDecodedLine(10200).equals("max:10200B")) {
+        logger.error("multi-KB"); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2LargeChunkWitnessTest(logger as Test.Logger) as Boolean {
+    logger.debug("processMessage: a multi-KB well-formed chunk round-trips; bytesLen witnessed");
+    // 32 records × 250-byte words = 8160 B binary (~10.9 KB base64) — well past
+    // Story 1.4's ~900 B floor, exercising the larger-chunk receive path.
+    var n = 32;
+    var wordLen = 250;
+    var payload = GateV2TestSupport.largeChunk(n, wordLen);
+    var msg = GateV2TestSupport.largeEnvelope(GateV2TestSupport.toBase64(payload), n);
+    var r = GateV2.processMessage(msg);
+    if (!r.ok) { logger.error("large chunk rejected: " + r.err); return false; }
+    if (r.off != 0) { logger.error("offset"); return false; }
+    if (r.bytesLen != payload.size()) {
+        logger.error("bytesLen witness wrong: " + r.bytesLen); return false;
+    }
+    if (r.bytesLen <= 900) {
+        logger.error("fixture not larger than Story-1.4 size"); return false;
     }
     return true;
 }

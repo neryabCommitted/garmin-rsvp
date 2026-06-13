@@ -1,10 +1,10 @@
 ---
-baseline_commit: e25aa33
+baseline_commit: b252047
 ---
 
 # Story 1.5: Gate V3 — chunk-size calibration (hardware)
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 
@@ -33,26 +33,27 @@ so that the transfer engine ships with a calibrated chunk size instead of a gues
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Sweep mode + cancel in the V2 runner (companion) (AC: 1) — **extend the existing harness in place; do not fork a parallel gate_v3 runner**
-  - [ ] Add a size-sweep capability to `companion/lib/gate_v2/gate_v2_runner.dart`. The runner already owns chunk size (via `recordsPerChunk`) and the codec path; generalize it so a run can step payload size upward instead of holding it fixed. Keep the existing fixed-N reliability run working (Story 1.4's evidence path is not broken). Pure Dart, **no Flutter imports** — testable with the existing `FakeBridge`.
-  - [ ] **Parametrize size by target payload bytes, not record count.** `encodeChunk` (`companion/lib/protocol/stream_codec.dart`) accepts words of 1–255 UTF-8 bytes (SPEC §5), so a target byte size is hit by choosing word length × count — this lifts the implicit ~9 KB ceiling the 999-record cap imposes and lets the sweep reach and cross the ~12 KB base64 / 16 384 B serialized cap. Generate **size-stable-but-content-varying** filler per chunk (keep the Story-1.4 property: cross-chunk misdelivery/reorder cannot decode silently as the right chunk). Stay SPEC §5-valid (`orpPivot < wordLen`, `wordLen` 1–255).
-  - [ ] **Sweep schedule:** start ≤1 KB (a known-good size — Story 1.4 ran ~900 B cleanly), step upward (e.g. +1 KB linear, or geometric — see Dev Notes → Sweep design). At each size send **M sends** (default M=3) and require all M to ack before stepping up; on the **first size where a send is rejected**, record last-good + first-failing, **re-test that size once** to rule out the (c) silent-hang, then stop. Cap the sweep at a hard max (default ~20 KB binary / past the phone cap) so it terminates even if no ceiling appears below the SDK serializer cap.
-  - [ ] **Per-step outcome classification** (the deferred evidence-sharpening): for every send record `{stepSize, chunkIndex, outcome}` where outcome ∈ `{ack, sizeErrorCode(codeVerbatim), genericException(codeVerbatim), silentTimeout}`. Split the Story-1.4 single `timeoutCount` bucket: a timeout now carries its size and index, and is labelled silent-hang-suspect vs (the runner cannot see SDK-SUCCESS-without-ack directly, but it CAN record whether the send future *completed* before the ack timeout — record that bit so α/β/c stay separable). Match size-class codes case-insensitively against a small known set (`TOO_LARGE`, `MESSAGE_TOO_LARGE`, `-102`, `BLE_REQUEST_TOO_LARGE`) and tag them `sizeError` vs generic.
-  - [ ] **Cancel seam (deferred-work item #1, now required):** add a `cancel()` API to `GateV2Runner` (cooperative — checked at each step/attempt boundary; a wedged native send cannot be force-killed, document that limit as Story 1.4 already documented for the pending call). A cancelled run returns a partial, well-formed summary (not an exception). N / sweep length stays bounded by construction.
-  - [ ] **Transport = base64-String only** (ADR 0002 decided it; Run B `List<int>` is not re-run — note why in Dev Notes). Record per step **both** the SPEC §5 binary byte size and the base64-wire byte size, because the phone cap (α) is on the wire/serialized size while the BLE cap (β) is on the message — Epic 4 must size against the binding one.
-  - [ ] Extend `GateV2Summary` (or add a `GateV3SweepSummary`) with: `lastGoodBytes`, `firstFailBytes` (binary + wire each), `rejectionClass`, `safeWorkingBytes` (last-good − margin), `perStep` records, and a `transcript()` producing the gates.md-ready block. Keep the existing summary fields intact for the reliability path.
-  - [ ] Tests in `companion/test/gate_v2/gate_v2_runner_test.dart` (extend; mirrors `lib/`): `FakeBridge` scripted to error with a `TOO_LARGE` code at a threshold size → sweep stops, last-good/first-fail/class correct; scripted silent-hang (future never completes) at a size → timeout attributed to that size+index, re-test confirms, class = (c)-suspect; `cancel()` mid-sweep → partial summary, no throw; size→records generation hits the requested byte size within tolerance and stays SPEC §5-valid; existing Story-1.4 fixed-N tests stay green. `flutter analyze` clean under strict options; protocol conformance tests stay green.
+- [x] Task 1: Sweep mode + cancel in the V2 runner (companion) (AC: 1) — **extend the existing harness in place; do not fork a parallel gate_v3 runner**
+  - [x] Add a size-sweep capability to `companion/lib/gate_v2/gate_v2_runner.dart`. The runner already owns chunk size (via `recordsPerChunk`) and the codec path; generalize it so a run can step payload size upward instead of holding it fixed. Keep the existing fixed-N reliability run working (Story 1.4's evidence path is not broken). Pure Dart, **no Flutter imports** — testable with the existing `FakeBridge`. → `runSweep()` added alongside `run()`; both share `_transcode`/codec/ack path; no Flutter imports.
+  - [x] **Parametrize size by target payload bytes, not record count.** `encodeChunk` (`companion/lib/protocol/stream_codec.dart`) accepts words of 1–255 UTF-8 bytes (SPEC §5), so a target byte size is hit by choosing word length × count — this lifts the implicit ~9 KB ceiling the 999-record cap imposes and lets the sweep reach and cross the ~12 KB base64 / 16 384 B serialized cap. Generate **size-stable-but-content-varying** filler per chunk (keep the Story-1.4 property: cross-chunk misdelivery/reorder cannot decode silently as the right chunk). Stay SPEC §5-valid (`orpPivot < wordLen`, `wordLen` 1–255). → `_recordsForBytes` tiles to EXACTLY the target (6–260 B records, no remainder stranding); `_fillerWord` rotates ASCII by a per-send seed; orpPivot 0 on ASCII lead bytes.
+  - [x] **Sweep schedule:** start ≤1 KB … geometric … M sends … first rejection → re-test once → stop … hard max. → geometric-coarse (×2 from 768 B floor) then **bisect** the last-good→first-fail gap; M default 3, all must ack to step up; first rejection re-tested once; hard cap default 20 KB.
+  - [x] **Per-step outcome classification** (the deferred evidence-sharpening) … `{ack, sizeError, genericError, silentTimeout, successNoAckTimeout}` … record whether the send future completed … size-class codes case-insensitive. → `SweepSendOutcome` + `SweepStep{targetBytes,binaryBytes,wireBytes,sendIndex,outcome,futureCompleted,isRetest,codeVerbatim}`; `_isSizeError` matches `TOO_LARGE`/`-102` case-insensitively; `_classify` → α/β/(c)/generic.
+  - [x] **Cancel seam (deferred-work item #1, now required):** `cancel()` API … cooperative … partial well-formed summary. → `GateV2Runner.cancel()` checked at each step/attempt boundary in both `run` and `runSweep`; wedged-native-send limit documented; partial `GateV2Summary`/`GateV3SweepSummary` (`cancelled` flag) returned, no throw.
+  - [x] **Transport = base64-String only** (ADR 0002) … record both binary and base64-wire size. → sweep forces `base64String`; `SweepStep` carries both; `_wireBytesFor` computes wire for non-sent sizes (safe-working).
+  - [x] Extend with `GateV3SweepSummary`: `lastGoodBytes`/`firstFailBytes` (binary+wire), `rejectionClass`, `rejectionCode`, `safeWorkingBytes` (last-good − margin), `safeWorkingWords`, `perStep`, `transcript()`. `GateV2Summary` fields intact (one optional `cancelled` field added, default false).
+  - [x] Tests in `companion/test/gate_v2/gate_v2_runner_test.dart`: `FakeBridge.bySize` scripts a size-keyed `TOO_LARGE` (β & α), size-keyed hang (transient-noise & reproduced-(c)), `successNoAck`-reproduced (β); `cancel()` mid-sweep → partial, no throw; size generation exact + SPEC §5-valid; geometric schedule; single-shot guard; existing Story-1.4 fixed-N tests stay green. `flutter analyze` clean; protocol conformance green. **(companion: 77/77, analyze clean.)**
 
-- [ ] Task 2: Sweep controls + Stop button in the harness screen (companion) (AC: 1)
-  - [ ] Extend `companion/lib/gate_v2/gate_v2_screen.dart`: a **mode toggle** (reliability run | size sweep), sweep parameters (start size, step, max, M sends/size — sensible defaults pre-filled), a live readout (current step size in binary+wire bytes, last-good, last error code/class, sends acked at current size), and a **Stop button** wired to `runner.cancel()` (visible whenever a run is in flight). Final summary view stays selectable/transcribable. Keep the phone awake via `flutter run` over USB (no wakelock dep — Story 1.4 precedent).
-  - [ ] The `GarminSpikeBridge` adapter is reused unchanged (base64 transport already lives in the runner's `_transcode`). `initialize()` keeps its 10 s timeout guard. No new pubspec deps.
-  - [ ] Update `companion/test/widget_test.dart` smoke test if the screen's constructor/controls change shape (it must still pump without platform channels).
+- [x] Task 2: Sweep controls + Stop button in the harness screen (companion) (AC: 1)
+  - [x] Extend `companion/lib/gate_v2/gate_v2_screen.dart`: **mode toggle** (V2 reliability | V3 size sweep), sweep params (start size, max, M — defaults 768/20000/3 pre-filled), live readout (phase, current size binary+wire, last-good, sends/acks, last outcome+code), **Stop button** wired to `runner.cancel()` (visible while running). Summary view stays selectable/transcribable. `flutter run` over USB keeps the phone awake (no wakelock dep).
+  - [x] `GarminSpikeBridge` reused unchanged; `initialize()` keeps its 10 s timeout guard; no new pubspec deps.
+  - [x] Updated `companion/test/widget_test.dart`: asserts the new title + mode-toggle segments + Stop absent at rest; still pumps without platform channels. **(widget test green.)**
 
-- [ ] Task 3: Watch side — accept and report larger chunks without crashing (companion + watch) (AC: 1)
-  - [ ] The watch receive path (`watch/source/GateV2View.mc` `GateV2.processMessage`, `watch/source/PaceTurnerApp.mc` `onPhoneMessage`) must survive **larger** payloads than Story 1.4's ~900 B with no fixed-size assumption: `arrayToByteArray` allocates to `arr.size()` (fine), `isPlausibleBase64` scans the full string (fine), `base64ToByteArray` → `StringUtil.convertEncodedString` and `StreamDecoder.decodeChunk` are already bounds-checked. **Confirm** (don't assume) no buffer/loop caps a larger chunk, and that the broad-catch receive guard still records evidence rather than crashing if a large decode fails. NFR2 heap (≤600 KB) is not a gate concern for a disposable spike, but a decode that allocates a multi-KB ByteArray must not OOM-crash the run — bound it / catch broadly (already the pattern).
-  - [ ] Add **free evidence**: track and display the **max payload byte size the watch successfully decoded** this run (extend the counters line / evidence string in `GateV2.evidenceString`). This is the watch's independent witness of the largest message that actually crossed BLE — corroborates the phone-side last-good. Keep it a bounded counter (no growing log; logging-budget discipline AR25).
-  - [ ] Keep the two-press reset (Run separation) and generation-tagged acks from Story 1.4 — a size sweep is still one sideload, multiple runs.
-  - [ ] Extend `watch/source-test/GateV2Test.mc`: a large well-formed base64 fixture round-trips through `processMessage` (never feed `convertEncodedString` malformed input — uncatchable SDK 8.4.0 system error, Story 1.2 lesson); max-decoded-size accounting is pure-tested. Verify all three local targets green at Strict `-l 3` (normal, `-r`, `-t`), then run the suite in the exact CI image (`ghcr.io/matco/connectiq-tester:latest`, SDK 8.4.0, `fenix847mm`) before pushing. Protocol baseline tests stay green.
+- [x] Task 3: Watch side — accept and report larger chunks without crashing (companion + watch) (AC: 1)
+  - [x] Confirmed the watch receive path survives multi-KB payloads with no fixed-size assumption: `arrayToByteArray` → `new [arr.size()]b`, `isPlausibleBase64` full scan, `base64ToByteArray`/`StreamDecoder.decodeChunk` bounds-checked + dynamic alloc, broad-catch receive guard intact (records evidence, never crashes). No buffer/loop caps a larger chunk.
+  - [x] Added the **max-decoded-size witness**: `ProcessResult.bytesLen` (set to `bytes.size()` on success), `PaceTurnerApp._maxDecoded` (bounded counter, reset with the rest), `GateV2.maxDecodedLine` shown on the view, and `md:` field in `GateV2.evidenceString`. Bounded — no growing log (AR25).
+  - [x] Two-press reset + generation-tagged acks from Story 1.4 kept; `_maxDecoded` resets with the generation bump.
+  - [x] Extended `watch/source-test/GateV2Test.mc`: a large (8160 B / 32×250) well-formed base64 fixture round-trips through `processMessage` with `bytesLen` witnessed (`largeChunk` built byte-exact so `convertEncodedString` never sees malformed input); `maxDecodedLine` + `evidenceString` (new signature) pure-tested; bytesLen asserted on the existing String round-trip. All three targets build Strict `-l 3` clean (normal, `-r`, `-t`).
+  - [x] Ran the suite in the exact CI image (`ghcr.io/matco/connectiq-tester:latest`, SDK 8.4.0, `fenix847mm`): **21/21 PASS** (incl. `gateV2MaxDecodedLineTest`, `gateV2LargeChunkWitnessTest` — the 8160 B chunk round-trips, no 8.4.0 decode surprise). Protocol baseline green.
 
 - [ ] Task 4: Hardware sweep, record V3, wire the calibrated size forward (AC: 1, 2) — **human-in-the-loop (Nerya holds the phone)**
   - [ ] Prerequisites (same as Story 1.4 Task 3): Android phone with **Garmin Connect Mobile installed and paired to the Fenix 8**; watch app sideloaded per `docs/setup.md` (USB Mode → MTP, `gio copy`, unplug — sideload the **normal** build for crash symbols); companion via `flutter run`; watch app foregrounded for the whole run; phone unlocked/awake. **WIRELESS on real hardware only** — the simulator/tethered path misreports this whole area (SDK 2.0.3 tethered bug; AR15 spirit).
@@ -139,10 +140,71 @@ Task 4 is a hardware run executed by Nerya (phone + watch on the table). The dev
 
 ### Agent Model Used
 
+claude-opus-4-8[1m] (Opus 4.8)
+
 ### Implementation Plan
+
+One harness, two modes (no parallel `gate_v3/`). Extended `GateV2Runner` with
+`runSweep()` + `cancel()` beside the untouched fixed-N `run()`; added the V3
+evidence types (`SweepSendOutcome`, `RejectionClass`, `SweepStep`,
+`GateV3SweepProgress`, `GateV3SweepSummary`). Sweep = geometric-coarse →
+bisect, M sends/size, re-test once to separate a reproducible size ceiling from
+the mode-a silent hang. Screen gained a mode toggle, sweep params, live readout,
+and a Stop button wired to `cancel()`. Watch gained a max-decoded-size witness.
+TDD against the existing `FakeBridge` (extended with size-keyed scripting).
 
 ### Debug Log References
 
+- Pre-existing uncommitted work in the tree was **Story 1.4's code-review pass**
+  (13 patches + 2 deferrals, status→done), never committed. Verified green
+  (companion 69/69, analyze clean) and committed as `b252047` before starting
+  1.5, so the 1.5 diff is clean. Story `baseline_commit` advanced e25aa33 →
+  b252047 to match (the eventual 1.5 review diffs against the true start point).
+- `unintended_html_in_doc_comment` on a `List<int>` in a test doc comment — wrapped in backticks.
+- `unnecessary_brace_in_string_interps` on `${safeMarginBytes}` — removed braces.
+
 ### Completion Notes List
 
+- **Tasks 1–2 complete & verified:** `flutter analyze` clean; `flutter test`
+  **77/77** (19 prior runner + 9 new sweep + widget + protocol). Sweep tests
+  cover: clean β ceiling (bisected), α phone-cap, transient-(c)-noise-continues,
+  reproduced-(c), reproduced-SUCCESS-without-ack→β, cancel-mid-sweep, exact
+  size generation + SPEC §5 validity, geometric schedule, single-shot guard.
+- **Task 3 complete & verified:** watch witness added; all three targets build
+  Strict `-l 3` clean (normal, `-r`, `-t`) on host SDK 9.1.0; **CI image (SDK
+  8.4.0, `fenix847mm`) 21/21 PASS** — the 8160 B large-chunk fixture round-trips
+  with no 8.4.0 decode surprise.
+- **Task 4 (hardware) NOT started** — requires Nerya (phone + watch). Harness,
+  Stop button, watch witness, run checklist, and gates.md §V3 fill-in template
+  are ready. No hardware numbers fabricated (story forbids; simulator misreports).
+- Both Story-1.4 deferred items resolved and pruned (struck through) in
+  `deferred-work.md`.
+- Scope held: no Epic 4 modules, no parallel `gate_v3/`, no SPEC change, no Run B
+  re-sweep, no release hardening. Disposable spike files only.
+
+### Hardware run checklist (Task 4 — Nerya)
+
+Same prerequisites as Story 1.4 Task 3:
+1. Android phone with **Garmin Connect Mobile installed and paired to the Fenix 8**; phone unlocked/awake, app foregrounded the whole run.
+2. Sideload the **normal** watch build (crash symbols): `watch/bin/PaceTurner.prg` via MTP per `docs/setup.md` (USB Mode → MTP, `gio copy`, unplug). Foreground the GateV2 app.
+3. Companion via `flutter run` over USB (keeps the phone awake; no wakelock).
+4. In the harness: select **V3: size sweep**, leave defaults (start 768, max 20000, M 3), **Start run**. **WIRELESS only** (simulator/tethered misreports — AR15).
+5. Watch the live readout: phase, current size (binary/wire), last-good, last outcome+code. The **Stop** button cancels cleanly if a send wedges.
+6. When it converges (or stops at the cap), the summary panel shows the gates.md-ready transcript. Read the **watch** display for `max:<n>B` (the decoded-size witness) and note it.
+7. Probe (c) deliberately: any timeout the sweep reports has already been re-tested once; if you see repeated silent timeouts at a size below a clean larger size, that's (c) noise, not the ceiling.
+
+Then transcribe the summary + watch witness into `docs/gates.md` §V3 (fill the _TBD_ table + class + margin + words/chunk), bold the verdict-matrix row, fill the §V3 Result line, and flip sprint-status `1-5 → review`.
+
 ### File List
+
+- `companion/lib/gate_v2/gate_v2_runner.dart` — sweep mode (`runSweep`) + `cancel()` + classified outcomes + V3 evidence types; `cancelled` on `GateV2Summary`
+- `companion/lib/gate_v2/gate_v2_screen.dart` — V2/V3 mode toggle, sweep params, live readout, Stop button
+- `companion/test/gate_v2/gate_v2_runner_test.dart` — `FakeBridge.bySize` + size-keyed scripting; V3 sweep test group (9 tests)
+- `companion/test/widget_test.dart` — updated for the new title + mode toggle + Stop-absent-at-rest
+- `watch/source/GateV2View.mc` — `ProcessResult.bytesLen`, `maxDecodedLine`, `evidenceString` `md:` field, witness drawn on the view
+- `watch/source/PaceTurnerApp.mc` — `_maxDecoded` witness counter (tracked, reset, exposed)
+- `watch/source-test/GateV2Test.mc` — `largeChunk`/`largeEnvelope` fixtures; large-chunk witness test; `maxDecodedLine` + new `evidenceString` tests
+- `docs/gates.md` — §V3 expanded (procedure, classes, fill-in measured table, verdict matrix); V3 status row updated
+- `_bmad-output/implementation-artifacts/deferred-work.md` — the two Story-1.4 items marked RESOLVED
+- `_bmad-output/implementation-artifacts/1-5-gate-v3-chunk-size-calibration-hardware.md` — this story (tasks, Dev Agent Record)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — `1-5 → in-progress`

@@ -12,7 +12,7 @@ references this page. See architecture §"Validation gates" (AR27–AR31).
 |------|----------------|--------|--------|
 | **V1** | AMOLED screen-on for ≥60-min hands-off reading (+ dim-AON fallback legibility) | **passed-dim** (2026-06-11) | Lit-dim & legible 61 min hands-off; never OFF; one-button restore works. FR4 satisfied in its fallback form |
 | **V2** | Reliable repeated phone→watch sends (Android first-send bug defeated); bridge sufficiency (OQ2) | **passed** (2026-06-11) | 400/400 first-try ack-confirmed sends (200 × 2 encodings); bug not observed; OQ2 = keep stock plugin, base64 transport ([ADR 0002](decisions/0002-oq2-companion-bridge.md)) |
-| **V3** | Per-message chunk-size ceiling (`BLE_REQUEST_TOO_LARGE` threshold) | not started | — |
+| **V3** | Per-message chunk-size ceiling (`BLE_REQUEST_TOO_LARGE` threshold) | harness built; **pending hardware run** | Sweep mode + Stop + watch witness done; Strict ×3 clean, companion 77/77, CI image 21/21; awaiting Nerya's wireless sweep |
 | **V4** | 1-hour reading session battery drain vs ≤10%/hour target | not started | — |
 
 ## V1 — Hands-off screen-on (Story 1.3)
@@ -118,9 +118,64 @@ Transfers run under a foreground service (freeze evidence above). Add ProGuard
 `-keep class com.garmin.** { *; }` before any release build (plugin ships no keeps).
 
 ## V3 — Chunk-size calibration (Story 1.5)
-_Procedure:_ sweep chunk sizes upward from ≤1 KB on the V2 harness; find the
-`BLE_REQUEST_TOO_LARGE` (-102) threshold; record the safe working size.
-_Status:_ not started. _Result:_ —
+_Procedure:_ sweep chunk sizes upward from ≤1 KB on the V2 harness; find the size-class
+rejection threshold (α phone-serializer cap / β `BLE_REQUEST_TOO_LARGE -102`); record the safe
+working chunk size in binary bytes, base64-wire bytes, and ~words/chunk.
+_Status:_ **pending hardware run** (harness + watch witness built, Strict `-l 3` clean ×3 targets;
+size-sweep logic unit-tested 9/9, full companion suite green). _Result:_ — (transcribe below).
+
+**Method.** Same harness, sweep mode: `GateV2Runner.runSweep` (`companion/lib/gate_v2/`) sends
+**M sends per size, all must ack to step up**; geometric-coarse (×2 from a ≤1 KB known-good floor)
+to the first reproduced rejection, then **bisect** the last-good→first-fail gap to pin the ceiling
+within the safety margin. Each rejection is **re-tested once** to separate a reproducible size
+ceiling from the Story-1.4 mode-a silent hang (suspect (c)). Size is parametrized by **target SPEC
+§5 binary bytes** (word length × count via `encodeChunk`), lifting the fixed-N record cap so the
+sweep can cross the ~12 KB base64 / 16 384 B serializer cap. Transport = **base64-String only**
+(ADR 0002; Run B `List<int>` not re-swept — re-running the rejected encoding adds no decision
+value). Per-send outcome is classified `{ack, sizeError(code), genericError(code), silentTimeout,
+successNoAckTimeout}`, recording whether the send future completed before the ack timeout so a
+timeout is attributable (deferred-work item #2, now resolved). Cancel/Stop seam added
+(deferred-work item #1, now resolved). **Wireless on real hardware only** (SDK 2.0.3 tethered bug).
+Watch side reports its independent **max-decoded-size witness** (largest SPEC §5 payload it
+successfully decoded), corroborating the phone-side last-good.
+
+**The three rejection classes** (the gate's whole point — attribution, not just a number):
+- **(α) `FAILURE_MESSAGE_TOO_LARGE`** — SDK 2.0.3 serializer cap (~16 384 serialized bytes,
+  ≈12 KB binary for base64), phone-side, before BLE. **Very likely hit first** with the stock
+  plugin — a real bounding number for Epic 4.
+- **(β) `BLE_REQUEST_TOO_LARGE` (-102)** — undocumented BLE per-message cap, "may be lower" than
+  α. May return a code or just suppress delivery → a reproduced, size-monotonic `successNoAckTimeout`.
+- **(c) silent hang (mode a)** — size-independent reliability bug. A timeout that does NOT reproduce
+  at the same size is (c) noise, not the ceiling; re-test discipline separates it.
+
+**Measured** (transcribe from the harness summary + watch witness after Nerya's run):
+
+| Quantity | Binary bytes | base64-wire bytes |
+|---|---|---|
+| Last size that ack-confirmed all M sends | _TBD_ | _TBD_ |
+| First size whose rejection reproduced | _TBD_ | _TBD_ |
+| **Safe working chunk size** (last-good − margin) | **_TBD_** | **_TBD_** |
+
+- Rejection class: _α / β / c_ — code verbatim: `_TBD_`.
+- Safe-working margin: _TBD_ B (rationale: BLE round-trip variance + envelope-dict overhead
+  headroom below the binding cap).
+- **~words/chunk** at the safe working size: _TBD_ (assuming ~10 B/word = 5-byte SPEC §5 header +
+  ~5-char average word) — Epic 4's 200–500-word boundary chunker (AR23) adopts this directly.
+- Watch max-decoded-size witness: _TBD_ B (independent confirmation of the largest message that
+  crossed BLE).
+
+**Verdict matrix** (bold the observed row after the run):
+
+| Observed | Verdict | Consequence (Epic 4) |
+|---|---|---|
+| Clean BLE ceiling (β, `-102`) found below the phone cap | V3 calibrated — BLE-bounded | `transfer_engine` chunk size = safe-working (BLE-bound); fork to native bytes won't help |
+| Phone serializer cap (α) hit first, no BLE cap below it | V3 calibrated — transport-cap-bounded | Safe-working below α; **ADR 0002 escape hatch**: fork to SDK 2.4.0 native bytes would raise it |
+| Only a silent hang (c) appears, no size-class rejection | V3 conservative — not BLE-bounded | Adopt a conservative size with margin below the phone cap; re-measure in Epic 4 |
+| No rejection at all below the hard cap | V3 conservative — cap-bounded | Adopt the cap-bounded size; chunk to taste within it |
+
+> V3 is a **calibration**, not a pass/fail premise check — V2 already proved the channel (§V2:
+> 400/400, no `TOO_LARGE`/-102 at ~1 KB). A conservative-but-working size satisfies AC1's "safe
+> working chunk size is recorded"; no premise-rework flag is raised here.
 
 ## V4 — Reading-session battery (Story 3.9)
 _Procedure:_ 60-min continuous session on hardware (screen on, sync connected); measure drain.

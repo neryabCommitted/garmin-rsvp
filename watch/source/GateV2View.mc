@@ -25,12 +25,14 @@ module GateV2 {
         public var off as Number?;     // chunk offset, set when ok
         public var err as String?;     // SPEC §8 code or spike-local label
         public var enc as String;      // payload encoding seen: String/Array/?
+        public var bytesLen as Number; // decoded SPEC §5 binary size, set when ok
 
         function initialize() {
             ok = false;
             off = null;
             err = null;
             enc = "?";
+            bytesLen = 0;
         }
     }
 
@@ -147,6 +149,9 @@ module GateV2 {
         }
         r.ok = true;
         r.off = copy[Protocol.KEY_OFFSET] as Number;
+        // The watch's independent witness of the largest message that crossed
+        // BLE — corroborates the phone-side last-good (gate V3, Story 1.5).
+        r.bytesLen = bytes.size();
         return r;
     }
 
@@ -183,14 +188,22 @@ module GateV2 {
             + " A:" + acked.toString();
     }
 
+    // Max-decoded-size witness line (gate V3): the largest SPEC §5 payload the
+    // watch successfully decoded this run, in bytes. A bounded counter — no
+    // growing log (AR25 logging-budget discipline).
+    function maxDecodedLine(maxDecoded as Number) as String {
+        return "max:" + maxDecoded.toString() + "B";
+    }
+
     // Evidence wire form persisted at exit — a compact String, not nested
     // arrays (Storage value-type polys differ between SDK 8.4.0/9.1.0).
     function evidenceString(received as Number, valid as Number, invalid as Number,
-            acked as Number, ackErrors as Number, enc as String, err as String?) as String {
+            acked as Number, ackErrors as Number, maxDecoded as Number,
+            enc as String, err as String?) as String {
         return "r:" + received.toString() + ",v:" + valid.toString()
             + ",i:" + invalid.toString() + ",a:" + acked.toString()
-            + ",ae:" + ackErrors.toString() + ",enc:" + enc
-            + ",err:" + (err == null ? "none" : err);
+            + ",ae:" + ackErrors.toString() + ",md:" + maxDecoded.toString()
+            + ",enc:" + enc + ",err:" + (err == null ? "none" : err);
     }
 }
 
@@ -245,8 +258,11 @@ class GateV2View extends WatchUi.View {
         dc.drawText(cx, cy + small * 2, Graphics.FONT_XTINY, status,
             Graphics.TEXT_JUSTIFY_CENTER);
 
+        dc.drawText(cx, cy + small * 3, Graphics.FONT_XTINY,
+            GateV2.maxDecodedLine(_app.maxDecoded()), Graphics.TEXT_JUSTIFY_CENTER);
+
         if (_app.resetArmed()) {
-            dc.drawText(cx, cy + small * 3, Graphics.FONT_XTINY,
+            dc.drawText(cx, cy + small * 4, Graphics.FONT_XTINY,
                 "reset? press again", Graphics.TEXT_JUSTIFY_CENTER);
         }
     }

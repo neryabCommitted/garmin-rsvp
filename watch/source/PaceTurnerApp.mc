@@ -25,6 +25,7 @@ class PaceTurnerApp extends Application.AppBase {
     private var _invalid as Number;
     private var _acked as Number;
     private var _ackErrors as Number;
+    private var _maxDecoded as Number;
     private var _lastError as String?;
     private var _lastEncoding as String;
     private var _resetArmedAt as Number?;
@@ -41,6 +42,7 @@ class PaceTurnerApp extends Application.AppBase {
         _invalid = 0;
         _acked = 0;
         _ackErrors = 0;
+        _maxDecoded = 0;
         _lastError = null;
         _lastEncoding = "?";
         _resetArmedAt = null;
@@ -69,7 +71,7 @@ class PaceTurnerApp extends Application.AppBase {
         try {
             Storage.setValue(EVIDENCE_KEY, GateV2.evidenceString(
                 _received, _valid, _invalid, _acked, _ackErrors,
-                _lastEncoding, _lastError));
+                _maxDecoded, _lastEncoding, _lastError));
         } catch (e) {
             System.println("GateV2: evidence persist failed");
         }
@@ -93,6 +95,9 @@ class PaceTurnerApp extends Application.AppBase {
             _lastEncoding = result.enc;
             if (result.ok && result.off != null) {
                 _valid++;
+                if (result.bytesLen > _maxDecoded) {
+                    _maxDecoded = result.bytesLen;
+                }
                 transmitAck(result.off as Number);
             } else {
                 _invalid++;
@@ -120,6 +125,7 @@ class PaceTurnerApp extends Application.AppBase {
     function receivedCount() as Number { return _received; }
     function validCount() as Number { return _valid; }
     function ackedCount() as Number { return _acked; }
+    function maxDecoded() as Number { return _maxDecoded; }
     function lastError() as String? { return _lastError; }
     function lastEncoding() as String { return _lastEncoding; }
 
@@ -146,6 +152,7 @@ class PaceTurnerApp extends Application.AppBase {
         _invalid = 0;
         _acked = 0;
         _ackErrors = 0;
+        _maxDecoded = 0;
         _lastError = null;
         _lastEncoding = "?";
         _resetArmedAt = null;

@@ -40,6 +40,10 @@ enum FakeAction {
 
   /// Ack arrives and the attempt settles, then the send future errors late.
   ackThenLateError,
+
+  /// Send errors with a size-class code (the gate V3 ceiling signature). The
+  /// exact code is [FakeBridge.sizeErrorCode] so a test can pick α vs β.
+  throwSizeError,
 }
 
 /// What [FakeBridge.reinit] does when the defense calls it.
@@ -50,7 +54,17 @@ enum ReinitBehavior { succeed, throwError, hang }
 class FakeBridge implements SpikeBridge {
   FakeBridge(this.script);
 
+  /// Size-driven script for the V3 sweep: keyed by the SPEC §5 binary payload
+  /// byte size of the send. When set, it overrides [script] (the sweep gives
+  /// every send a fresh offset, so offset/attempt keying is useless there).
+  FakeBridge.bySize(this.sizeScript) : script = ((_, _) => FakeAction.ack);
+
   final FakeAction Function(int offset, int attempt) script;
+  FakeAction Function(int binaryBytes)? sizeScript;
+
+  /// The verbatim code [FakeAction.throwSizeError] errors with — β by default
+  /// (`BLE_REQUEST_TOO_LARGE`); a test can set the α serializer-cap code.
+  String sizeErrorCode = '[BLE_REQUEST_TOO_LARGE]';
 
   final StreamController<Map<String, dynamic>> _controller =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -94,7 +108,10 @@ class FakeBridge implements SpikeBridge {
     final offset = msg[ProtocolKeys.keyOffset]! as int;
     final attempt = (_attemptsByOffset[offset] ?? 0) + 1;
     _attemptsByOffset[offset] = attempt;
-    switch (script(offset, attempt)) {
+    final action = sizeScript != null
+        ? sizeScript!(_binaryBytes(msg))
+        : script(offset, attempt);
+    switch (action) {
       case FakeAction.ack:
         inFlight--;
         _ack(offset);
@@ -136,7 +153,23 @@ class FakeBridge implements SpikeBridge {
           const Duration(milliseconds: 1),
           () => throw SpikeSendException('[LATE_FAILURE]'),
         );
+      case FakeAction.throwSizeError:
+        inFlight--;
+        return Future<void>.error(SpikeSendException(sizeErrorCode));
     }
+  }
+
+  /// SPEC §5 binary payload size of a send, recovered from its transport `p`
+  /// (base64 String → decoded length; `List<int>` → element count).
+  int _binaryBytes(Map<String, Object?> msg) {
+    final p = msg[ProtocolKeys.keyPayload];
+    if (p is String) {
+      return base64.decode(p).length;
+    }
+    if (p is List) {
+      return p.length;
+    }
+    return 0;
   }
 }
 
@@ -154,6 +187,34 @@ GateV2Runner makeRunner(
     recordsPerChunk: recordsPerChunk,
     sendTimeout: const Duration(milliseconds: 40),
     onProgress: onProgress,
+  );
+}
+
+GateV2Runner makeSweepRunner(
+  FakeBridge bridge, {
+  void Function(GateV3SweepProgress)? onSweepProgress,
+}) {
+  return GateV2Runner(
+    bridge: bridge,
+    encoding: PayloadEncoding.base64String,
+    sendTimeout: const Duration(milliseconds: 40),
+    onSweepProgress: onSweepProgress,
+  );
+}
+
+/// Sweep params tuned for fast, deterministic tests (small sizes, M=2, tight
+/// bisection, small safety margin).
+Future<GateV3SweepSummary> runTestSweep(
+  GateV2Runner runner, {
+  int maxBytes = 2048,
+}) {
+  return runner.runSweep(
+    startBytes: 64,
+    maxBytes: maxBytes,
+    sendsPerSize: 2,
+    growthFactor: 2.0,
+    bisectMarginBytes: 16,
+    safeMarginBytes: 32,
   );
 }
 
@@ -504,6 +565,151 @@ void main() {
       expect(text, contains('retried-then-acked: 1'));
       expect(text, contains('timeouts: 3'));
       expect(text, contains('re-init activations: 1 (recovered: 1)'));
+    });
+  });
+
+  group('V3 size sweep — ceiling detection', () {
+    test('clean BLE size-class ceiling: last-good < threshold <= first-fail, '
+        'bisected, class β', () async {
+      // Acks below 512 B, rejects at/above with the BLE -102 signature.
+      final bridge = FakeBridge.bySize(
+        (bytes) => bytes < 512 ? FakeAction.ack : FakeAction.throwSizeError,
+      );
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      expect(summary.lastGoodBytes, isNotNull);
+      expect(summary.firstFailBytes, isNotNull);
+      expect(summary.lastGoodBytes! < 512, isTrue);
+      expect(summary.firstFailBytes! >= 512, isTrue);
+      // Bisection pinned the gap to within the margin.
+      expect(summary.firstFailBytes! - summary.lastGoodBytes!,
+          lessThanOrEqualTo(16));
+      expect(summary.rejectionClass, RejectionClass.bleCapBeta);
+      expect(summary.rejectionCode, contains('BLE'));
+      expect(summary.safeWorkingBytes, summary.lastGoodBytes! - 32);
+      expect(summary.cancelled, isFalse);
+      // Wire bytes are recorded and exceed binary (base64 inflation).
+      expect(summary.lastGoodWireBytes! > summary.lastGoodBytes!, isTrue);
+      expect(summary.safeWorkingWords,
+          (summary.lastGoodBytes! - 32) ~/ 10);
+    });
+
+    test('phone serializer cap presents as class α', () async {
+      final bridge = FakeBridge.bySize(
+        (bytes) => bytes < 512 ? FakeAction.ack : FakeAction.throwSizeError,
+      )..sizeErrorCode = '[FAILURE_MESSAGE_TOO_LARGE]';
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      expect(summary.rejectionClass, RejectionClass.phoneCapAlpha);
+      expect(summary.rejectionCode, '[FAILURE_MESSAGE_TOO_LARGE]');
+    });
+
+    test('one-off silent hang does NOT reproduce → treated as noise, not the '
+        'ceiling; sweep continues to the cap', () async {
+      var hangedOnce = false;
+      final bridge = FakeBridge.bySize((bytes) {
+        if (bytes >= 200 && !hangedOnce) {
+          hangedOnce = true;
+          return FakeAction.hang; // single transient hang (suspect-c)
+        }
+        return FakeAction.ack;
+      });
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      // The transient hang did not become a ceiling — the sweep ran to the cap.
+      expect(summary.firstFailBytes, isNull);
+      expect(summary.rejectionClass, RejectionClass.none);
+      expect(summary.lastGoodBytes, 2048);
+      // Evidence of the hang and its successful re-test are both recorded.
+      expect(
+        summary.perStep.any(
+            (s) => s.outcome == SweepSendOutcome.silentTimeout && !s.isRetest),
+        isTrue,
+      );
+      expect(summary.perStep.any((s) => s.isRetest), isTrue);
+    });
+
+    test('reproduced silent hang (future never completes) classifies as (c)',
+        () async {
+      final bridge = FakeBridge.bySize(
+        (bytes) => bytes >= 500 ? FakeAction.hang : FakeAction.ack,
+      );
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      expect(summary.firstFailBytes, isNotNull);
+      expect(summary.rejectionClass, RejectionClass.silentHangC);
+      // The failing steps recorded the future as never completing.
+      final fail = summary.perStep.firstWhere(
+          (s) => s.outcome == SweepSendOutcome.silentTimeout);
+      expect(fail.futureCompleted, isFalse);
+    });
+
+    test('reproduced SUCCESS-without-ack (future completes, no ack) → class β',
+        () async {
+      final bridge = FakeBridge.bySize(
+        (bytes) => bytes >= 500 ? FakeAction.successNoAck : FakeAction.ack,
+      );
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      expect(summary.rejectionClass, RejectionClass.bleCapBeta);
+      final fail = summary.perStep.firstWhere(
+          (s) => s.outcome == SweepSendOutcome.successNoAckTimeout);
+      expect(fail.futureCompleted, isTrue);
+    });
+
+    test('cancel() mid-sweep returns a partial, well-formed summary, no throw',
+        () async {
+      late GateV2Runner runner;
+      final bridge = FakeBridge.bySize((_) => FakeAction.ack);
+      runner = makeSweepRunner(
+        bridge,
+        onSweepProgress: (p) {
+          if (p.sends >= 3) {
+            runner.cancel();
+          }
+        },
+      );
+      // Huge cap so only cancel can stop it.
+      final summary = await runner.runSweep(
+        startBytes: 64,
+        maxBytes: 1 << 20,
+        sendsPerSize: 2,
+      );
+
+      expect(summary.cancelled, isTrue);
+      expect(summary.perStep, isNotEmpty);
+      expect(summary.transcript(), contains('CANCELLED'));
+    });
+
+    test('size generation hits the target exactly and stays SPEC §5-valid',
+        () async {
+      final bridge = FakeBridge.bySize((_) => FakeAction.ack);
+      final summary = await runTestSweep(makeSweepRunner(bridge));
+
+      // Every step's actual binary payload equals its requested target …
+      for (final step in summary.perStep) {
+        expect(step.binaryBytes, step.targetBytes);
+      }
+      // … and every sent payload decodes as exactly n SPEC §5 records.
+      for (final msg in bridge.sent) {
+        final payload = base64.decode(msg[ProtocolKeys.keyPayload]! as String);
+        final n = msg[ProtocolKeys.keyCount]! as int;
+        final records = decodeChunk(Uint8List.fromList(payload), n);
+        expect(records, hasLength(n));
+      }
+      // Geometric coarse schedule started at the floor and doubled.
+      final targets =
+          summary.perStep.map((s) => s.targetBytes).toSet().toList()..sort();
+      expect(targets.first, 64);
+      expect(targets, contains(128));
+      expect(targets, contains(256));
+    });
+
+    test('single-shot: a second run throws', () async {
+      final bridge = FakeBridge.bySize((_) => FakeAction.ack);
+      final runner = makeSweepRunner(bridge);
+      await runTestSweep(runner);
+      expect(runner.runSweep, throwsStateError);
     });
   });
 }
