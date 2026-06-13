@@ -315,23 +315,23 @@ function gateV2CountsLineTest(logger as Test.Logger) as Boolean {
 function gateV2EvidenceStringTest(logger as Test.Logger) as Boolean {
     logger.debug("evidenceString: compact persisted form (String, not nested arrays)");
     var s = GateV2.evidenceString(200, 199, 1, 198, 2, 9800, "String", Protocol.ERR_DECODE_FAILURE);
-    if (!s.equals("r:200,v:199,i:1,a:198,ae:2,md:9800,enc:String,err:decodeFailure")) {
+    if (!s.equals("r:200,v:199,i:1,a:198,ae:2,rcv:9800,enc:String,err:decodeFailure")) {
         logger.error("formatted: " + s); return false;
     }
     var clean = GateV2.evidenceString(5, 5, 0, 5, 0, 32, "Array", null);
-    if (!clean.equals("r:5,v:5,i:0,a:5,ae:0,md:32,enc:Array,err:none")) {
+    if (!clean.equals("r:5,v:5,i:0,a:5,ae:0,rcv:32,enc:Array,err:none")) {
         logger.error("clean run: " + clean); return false;
     }
     return true;
 }
 
 (:test)
-function gateV2MaxDecodedLineTest(logger as Test.Logger) as Boolean {
-    logger.debug("maxDecodedLine: bounded witness display");
-    if (!GateV2.maxDecodedLine(0).equals("max:0B")) {
+function gateV2MaxReceivedLineTest(logger as Test.Logger) as Boolean {
+    logger.debug("maxReceivedLine: bounded witness display");
+    if (!GateV2.maxReceivedLine(0).equals("rcv:0B")) {
         logger.error("zero"); return false;
     }
-    if (!GateV2.maxDecodedLine(10200).equals("max:10200B")) {
+    if (!GateV2.maxReceivedLine(10200).equals("rcv:10200B")) {
         logger.error("multi-KB"); return false;
     }
     return true;
@@ -339,9 +339,10 @@ function gateV2MaxDecodedLineTest(logger as Test.Logger) as Boolean {
 
 (:test)
 function gateV2LargeChunkWitnessTest(logger as Test.Logger) as Boolean {
-    logger.debug("processMessage: a multi-KB well-formed chunk round-trips; bytesLen witnessed");
+    logger.debug("processMessage (full-decode integrity proof): a multi-KB chunk round-trips");
     // 32 records × 250-byte words = 8160 B binary (~10.9 KB base64) — well past
-    // Story 1.4's ~900 B floor, exercising the larger-chunk receive path.
+    // Story 1.4's ~900 B floor. processMessage stays the host/CI integrity
+    // proof (no watchdog in the sim); the device path uses receiveLight.
     var n = 32;
     var wordLen = 250;
     var payload = GateV2TestSupport.largeChunk(n, wordLen);
@@ -350,10 +351,89 @@ function gateV2LargeChunkWitnessTest(logger as Test.Logger) as Boolean {
     if (!r.ok) { logger.error("large chunk rejected: " + r.err); return false; }
     if (r.off != 0) { logger.error("offset"); return false; }
     if (r.bytesLen != payload.size()) {
-        logger.error("bytesLen witness wrong: " + r.bytesLen); return false;
+        logger.error("bytesLen wrong: " + r.bytesLen); return false;
     }
     if (r.bytesLen <= 900) {
         logger.error("fixture not larger than Story-1.4 size"); return false;
+    }
+    return true;
+}
+
+// ── receiveLight (gate V3 lighten-receive device path) ──────────────────────
+
+(:test)
+function gateV2ReceiveLightLargeChunkTest(logger as Test.Logger) as Boolean {
+    logger.debug("receiveLight: O(1) accept of a multi-KB chunk; received size witnessed");
+    var payload = GateV2TestSupport.largeChunk(32, 250); // 8160 B
+    var msg = GateV2TestSupport.largeEnvelope(GateV2TestSupport.toBase64(payload), 32);
+    var r = GateV2.receiveLight(msg);
+    if (!r.ok) { logger.error("valid large chunk rejected: " + r.err); return false; }
+    if (r.off != 0) { logger.error("offset"); return false; }
+    if (!r.enc.equals("String")) { logger.error("encoding label"); return false; }
+    // Received size is read from the base64 length in O(1) — must equal the
+    // true binary size without a full decode.
+    if (r.bytesLen != payload.size()) {
+        logger.error("received-size witness wrong: " + r.bytesLen); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2ReceiveLightSizeAccountingTest(logger as Test.Logger) as Boolean {
+    logger.debug("receiveLight: base64 received-size accounting matches the spec example");
+    var payload = ProtocolTestSupport.examplePayload(); // 32 bytes
+    var msg = GateV2TestSupport.exampleEnvelope(GateV2TestSupport.toBase64(payload));
+    var r = GateV2.receiveLight(msg);
+    if (!r.ok) { logger.error("example rejected: " + r.err); return false; }
+    if (r.bytesLen != payload.size()) {
+        logger.error("size " + r.bytesLen + " != " + payload.size()); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2ReceiveLightRejectionsTest(logger as Test.Logger) as Boolean {
+    logger.debug("receiveLight: structural rejections + bounded-prefix integrity, never crash");
+    var good = GateV2TestSupport.toBase64(ProtocolTestSupport.examplePayload());
+
+    // Not a dictionary.
+    var r = GateV2.receiveLight("hello");
+    if (r.ok || !GateV2.ERR_NOT_DICT.equals(r.err)) {
+        logger.error("non-dict accepted"); return false;
+    }
+
+    // Version gate (SPEC §2).
+    var badVersion = GateV2TestSupport.exampleEnvelope(good);
+    badVersion["v"] = 2;
+    r = GateV2.receiveLight(badVersion);
+    if (r.ok || !Protocol.ERR_VERSION_MISMATCH.equals(r.err)) {
+        logger.error("v=2 accepted"); return false;
+    }
+
+    // Missing fingerprint → malformed.
+    var noFp = GateV2TestSupport.exampleEnvelope(good);
+    noFp.remove("fp");
+    r = GateV2.receiveLight(noFp);
+    if (r.ok || !Protocol.ERR_MALFORMED_ENVELOPE.equals(r.err)) {
+        logger.error("missing fp accepted"); return false;
+    }
+
+    // Wrong type.
+    var badType = GateV2TestSupport.exampleEnvelope(good);
+    badType["t"] = Protocol.MSG_POSITION;
+    r = GateV2.receiveLight(badType);
+    if (r.ok || !Protocol.ERR_UNKNOWN_TYPE.equals(r.err)) {
+        logger.error("wrong type accepted"); return false;
+    }
+
+    // Bounded-prefix integrity: a payload whose first record header is invalid
+    // (wordLen 0) is rejected without a full decode. 48 zero bytes → valid
+    // base64, but headDecodes sees wordLen 0.
+    var zeros = new [48]b;
+    var badHead = GateV2TestSupport.largeEnvelope(GateV2TestSupport.toBase64(zeros), 1);
+    r = GateV2.receiveLight(badHead);
+    if (r.ok || !GateV2.ERR_BAD_PAYLOAD.equals(r.err)) {
+        logger.error("invalid first-record header accepted"); return false;
     }
     return true;
 }

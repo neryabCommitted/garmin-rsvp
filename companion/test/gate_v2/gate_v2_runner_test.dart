@@ -581,11 +581,14 @@ void main() {
       expect(summary.firstFailBytes, isNotNull);
       expect(summary.lastGoodBytes! < 512, isTrue);
       expect(summary.firstFailBytes! >= 512, isTrue);
-      // Bisection pinned the gap to within the margin.
+      // Bisection pinned the gap to within the margin (clean code rejection →
+      // watch alive → safe to bisect).
+      expect(summary.bisected, isTrue);
       expect(summary.firstFailBytes! - summary.lastGoodBytes!,
           lessThanOrEqualTo(16));
       expect(summary.rejectionClass, RejectionClass.bleCapBeta);
       expect(summary.rejectionCode, contains('BLE'));
+      expect(summary.watchdogSuspect, isFalse);
       expect(summary.safeWorkingBytes, summary.lastGoodBytes! - 32);
       expect(summary.cancelled, isFalse);
       // Wire bytes are recorded and exceed binary (base64 inflation).
@@ -638,23 +641,36 @@ void main() {
 
       expect(summary.firstFailBytes, isNotNull);
       expect(summary.rejectionClass, RejectionClass.silentHangC);
+      // A reproduced silent hang (phone-side mode-a, future never completed) is
+      // not bisected and is NOT a watchdog suspect (that's the watch-side
+      // SUCCESS-without-ack case).
+      expect(summary.bisected, isFalse);
+      expect(summary.watchdogSuspect, isFalse);
       // The failing steps recorded the future as never completing.
       final fail = summary.perStep.firstWhere(
           (s) => s.outcome == SweepSendOutcome.silentTimeout);
       expect(fail.futureCompleted, isFalse);
     });
 
-    test('reproduced SUCCESS-without-ack (future completes, no ack) → class β',
-        () async {
+    test('reproduced SUCCESS-without-ack → watchdog-suspect, NOT bisected '
+        '(dead channel), last-good is the answer', () async {
       final bridge = FakeBridge.bySize(
         (bytes) => bytes >= 500 ? FakeAction.successNoAck : FakeAction.ack,
       );
       final summary = await runTestSweep(makeSweepRunner(bridge));
 
       expect(summary.rejectionClass, RejectionClass.bleCapBeta);
+      expect(summary.watchdogSuspect, isTrue);
+      // A timeout-class cliff is NOT bisected (the watch may be dead) — so the
+      // gap stays the coarse step, not narrowed to the margin.
+      expect(summary.bisected, isFalse);
+      expect(summary.firstFailBytes! - summary.lastGoodBytes!,
+          greaterThan(16));
+      expect(summary.safeWorkingBytes, summary.lastGoodBytes! - 32);
       final fail = summary.perStep.firstWhere(
           (s) => s.outcome == SweepSendOutcome.successNoAckTimeout);
       expect(fail.futureCompleted, isTrue);
+      expect(summary.transcript(), contains('watch went unresponsive'));
     });
 
     test('cancel() mid-sweep returns a partial, well-formed summary, no throw',

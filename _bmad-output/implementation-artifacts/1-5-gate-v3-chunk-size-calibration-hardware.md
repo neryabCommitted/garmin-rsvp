@@ -4,7 +4,7 @@ baseline_commit: b252047
 
 # Story 1.5: Gate V3 — chunk-size calibration (hardware)
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -55,13 +55,13 @@ so that the transfer engine ships with a calibrated chunk size instead of a gues
   - [x] Extended `watch/source-test/GateV2Test.mc`: a large (8160 B / 32×250) well-formed base64 fixture round-trips through `processMessage` with `bytesLen` witnessed (`largeChunk` built byte-exact so `convertEncodedString` never sees malformed input); `maxDecodedLine` + `evidenceString` (new signature) pure-tested; bytesLen asserted on the existing String round-trip. All three targets build Strict `-l 3` clean (normal, `-r`, `-t`).
   - [x] Ran the suite in the exact CI image (`ghcr.io/matco/connectiq-tester:latest`, SDK 8.4.0, `fenix847mm`): **21/21 PASS** (incl. `gateV2MaxDecodedLineTest`, `gateV2LargeChunkWitnessTest` — the 8160 B chunk round-trips, no 8.4.0 decode surprise). Protocol baseline green.
 
-- [ ] Task 4: Hardware sweep, record V3, wire the calibrated size forward (AC: 1, 2) — **human-in-the-loop (Nerya holds the phone)**
-  - [ ] Prerequisites (same as Story 1.4 Task 3): Android phone with **Garmin Connect Mobile installed and paired to the Fenix 8**; watch app sideloaded per `docs/setup.md` (USB Mode → MTP, `gio copy`, unplug — sideload the **normal** build for crash symbols); companion via `flutter run`; watch app foregrounded for the whole run; phone unlocked/awake. **WIRELESS on real hardware only** — the simulator/tethered path misreports this whole area (SDK 2.0.3 tethered bug; AR15 spirit).
-  - [ ] Run the size sweep (base64 transport) from ≤1 KB upward. Record: **last-good size, first-failing size, rejection class (α phone-cap / β BLE-102 / c silent-hang), the error code verbatim**, and the watch's max-decoded-size witness — each in binary + base64-wire bytes. If the **phone cap (α) is hit before any watch BLE cap (β)**, that is the operative ceiling for the base64 transport and must be reported as such (with the note that a fork to SDK 2.4.0 native bytes would move it — ADR 0002 escape hatch). Probe the (c) ambiguity deliberately: any timeout gets its size re-tested.
-  - [ ] Compute the **safe working chunk size** = last-good minus a margin (state the margin and its rationale — BLE variance / envelope overhead headroom), expressed as binary bytes, wire bytes, and **~words/chunk** so Epic 4's chunker (200–500 words on sentence/paragraph boundaries) can adopt it directly.
-  - [ ] Update `docs/gates.md`: flip the V3 table row (status + result) and expand **§V3** — procedure (sweep schedule, transport, M/size), the measured last-good/first-fail/class with codes verbatim, the safe working size in all three units, the watch witness, and the **Epic 4 implication** (the value lands in `transfer_engine`'s chunk-size calibration hook — architecture line 423 / AR23; provisional chunk/bucket numbers, line 514, are now empirical). Use the §V1/§V2 sections as the format precedent; include a verdict matrix (observed row bold) covering: clean BLE ceiling found / phone-cap-first / silent-hang-confounded / no ceiling below cap.
-  - [ ] If the sweep cannot find a stable ceiling (only the (c) silent-hang appears, no size-class rejection) — record that the chunk size is **transport-cap-bounded, not BLE-bounded**, adopt a conservative size with margin below the phone cap, and note it for Epic 4 re-measurement. Do **not** raise a premise-rework flag for this gate — V2 already passed; V3 is a calibration, and a conservative-but-working size satisfies AC1's "safe working chunk size is recorded."
-  - [ ] Update sprint-status: `1-5-gate-v3-chunk-size-calibration-hardware` → review (code-review flips it to done).
+- [x] Task 4: Hardware sweep, record V3, wire the calibrated size forward (AC: 1, 2) — **human-in-the-loop (Nerya held the phone, 2026-06-13)**
+  - [x] Prerequisites met: Samsung SM-S938B / Android 16, GCM paired to Fenix 8 47 mm (fw 22.35, API 6.0.2); watch sideloaded via MTP (`gio copy`, unplug); companion via `flutter run`; watch app foregrounded; **wireless**.
+  - [x] Ran the size sweep (base64 transport). **last-good 12 096 B binary / 16 128 B wire; first-fail 12 288 B binary / 16 384 B wire; rejection class α (phone serializer cap), code `[FAILURE_MESSAGE_TOO_LARGE]`** (first-fail wire = exactly the 16 384 B SDK cap). β BLE cap is **above** α: watch received+acked a 12 288 B chunk (witness `rcv:12288B`, R/V/A 29/29/29). (c) not observed.
+  - [x] **Safe working chunk size = 11 584 B binary / 15 448 B wire** (last-good − 512 B margin: BLE variance + envelope-overhead headroom) ≈ **~1 158 words/chunk** at ~10 B/word — Epic 4's 200–500-word chunker has large headroom.
+  - [x] Updated `docs/gates.md`: V3 row flipped to **passed**; §V3 expanded with procedure, the two-run watchdog history, measured table, codes verbatim, watch witness, verdict matrix (observed row bold), and the two Epic-4 constraints (transport ≤11 584 B; decode incrementally).
+  - [x] Course-correction recorded: the **watch decode-watchdog** is the tighter real constraint (first sweep crashed the watch on synchronous full-chunk decode — uncatchable `Watchdog Tripped`, AR15 vindicated; simulator can't see it). Watch changed to **lighten-receive** (ack-on-receipt, no in-callback decode) to measure the transport ceiling; Epic 4 must decode incrementally (CIQ has no threads → timer-slice; community-confirmed). Not a premise-rework flag — V2 passed; V3 is calibration and AC1's safe working size is recorded.
+  - [x] Updated sprint-status: `1-5-gate-v3-chunk-size-calibration-hardware` → review (code-review flips it to done).
 
 ## Dev Notes
 
@@ -174,13 +174,28 @@ TDD against the existing `FakeBridge` (extended with size-keyed scripting).
   Strict `-l 3` clean (normal, `-r`, `-t`) on host SDK 9.1.0; **CI image (SDK
   8.4.0, `fenix847mm`) 21/21 PASS** — the 8160 B large-chunk fixture round-trips
   with no 8.4.0 decode surprise.
-- **Task 4 (hardware) NOT started** — requires Nerya (phone + watch). Harness,
-  Stop button, watch witness, run checklist, and gates.md §V3 fill-in template
-  are ready. No hardware numbers fabricated (story forbids; simulator misreports).
-- Both Story-1.4 deferred items resolved and pruned (struck through) in
-  `deferred-work.md`.
-- Scope held: no Epic 4 modules, no parallel `gate_v3/`, no SPEC change, no Run B
-  re-sweep, no release hardening. Disposable spike files only.
+- **Task 4 (hardware) complete (Nerya, 2026-06-13, wireless, real Fenix 8 ↔ SM-S938B/Android 16):**
+  - **last-good 12 096 B binary / 16 128 B wire; first-fail 12 288 B / 16 384 B; class α**
+    (`[FAILURE_MESSAGE_TOO_LARGE]`, wire = exactly the 16 384 B SDK 2.0.3 cap). Bisected.
+  - **Safe working chunk size 11 584 B binary / 15 448 B wire** (margin 512 B) ≈ **~1 158 words**.
+  - Watch witness `rcv:12288B`, R/V/A 29/29/29 — watch received+acked a 12 288 B chunk the phone's
+    serializer rejected ⇒ **β (BLE) > α (phone)**; α is the operative transport ceiling.
+- **Course-correction (the load-bearing finding) — watch decode watchdog (AR15 vindicated):** the
+  FIRST sweep attempt **crashed the watch app** — `Watchdog Tripped Error — Code Executed Too Long`
+  in `StreamDecoder.decodeChunk`/`isValidUtf8` (device `CIQ_LOG.YML`). Synchronous full-chunk decode
+  in the BLE receive callback exceeds the firmware watchdog (per-callback instruction budget,
+  device-varying, **absent in the simulator** → CI's 8 KB decode passed). The kill is **uncatchable**.
+  Researched the CIQ community (Garmin forums): only fix is to **slice work across timer ticks** (no
+  threads). Changed the watch to **lighten-receive** — O(1) structural validate + bounded-prefix
+  integrity touch + received-size witness + ack, NO full decode in the callback — so the sweep finds
+  the true *transport* ceiling and the watchdog is recorded as an Epic-4 constraint. `processMessage`
+  (full decode) stays the host/CI integrity proof. **Two Epic-4 constraints:** transport ≤11 584 B
+  binary; `ChunkedWordSource` must decode incrementally, never a whole chunk in the BLE callback.
+- **Verification:** companion `flutter test` **77/77**, `flutter analyze` clean; watch Strict `-l 3`
+  clean ×3 targets; **CI image (SDK 8.4.0, `fenix847mm`) 24/24** (3 new `receiveLight` tests).
+- Both Story-1.4 deferred items resolved and pruned (struck through) in `deferred-work.md`.
+- Scope held: no Epic 4 modules, no parallel `gate_v3/`, no SPEC change, no Run B re-sweep, no
+  release hardening. Disposable spike files only.
 
 ### Hardware run checklist (Task 4 — Nerya)
 
@@ -197,14 +212,14 @@ Then transcribe the summary + watch witness into `docs/gates.md` §V3 (fill the 
 
 ### File List
 
-- `companion/lib/gate_v2/gate_v2_runner.dart` — sweep mode (`runSweep`) + `cancel()` + classified outcomes + V3 evidence types; `cancelled` on `GateV2Summary`
-- `companion/lib/gate_v2/gate_v2_screen.dart` — V2/V3 mode toggle, sweep params, live readout, Stop button
-- `companion/test/gate_v2/gate_v2_runner_test.dart` — `FakeBridge.bySize` + size-keyed scripting; V3 sweep test group (9 tests)
+- `companion/lib/gate_v2/gate_v2_runner.dart` — sweep mode (`runSweep`) + `cancel()` + classified outcomes + V3 evidence types; bisect gated to non-destructive code rejections (`bisected`/`watchdogSuspect`/`rejectionOutcome`); `cancelled` on `GateV2Summary`
+- `companion/lib/gate_v2/gate_v2_screen.dart` — V2/V3 mode toggle, sweep params, live readout, Stop button; `debugPrint`s the live steps + final transcript to the device log (machine-readable retrieval)
+- `companion/test/gate_v2/gate_v2_runner_test.dart` — `FakeBridge.bySize` + size-keyed scripting; V3 sweep test group (bisect-vs-cliff, watchdogSuspect, α/β/c, cancel, exact size gen, single-shot)
 - `companion/test/widget_test.dart` — updated for the new title + mode toggle + Stop-absent-at-rest
-- `watch/source/GateV2View.mc` — `ProcessResult.bytesLen`, `maxDecodedLine`, `evidenceString` `md:` field, witness drawn on the view
-- `watch/source/PaceTurnerApp.mc` — `_maxDecoded` witness counter (tracked, reset, exposed)
-- `watch/source-test/GateV2Test.mc` — `largeChunk`/`largeEnvelope` fixtures; large-chunk witness test; `maxDecodedLine` + new `evidenceString` tests
-- `docs/gates.md` — §V3 expanded (procedure, classes, fill-in measured table, verdict matrix); V3 status row updated
+- `watch/source/GateV2View.mc` — **`receiveLight`** (lighten-receive: O(1) structural validate + `validateChunkEnvelopeLight` + `base64BinaryLen` + `headDecodes` bounded-prefix integrity); `ProcessResult.bytesLen`; witness renamed `maxReceivedLine`/`rcv:`; `evidenceString` `rcv:` field; witness drawn on the view. `processMessage` (full decode) retained for host/CI integrity proof
+- `watch/source/PaceTurnerApp.mc` — `onPhoneMessage` uses `receiveLight`; `_maxReceived` witness counter (tracked, reset, exposed as `maxReceived()`)
+- `watch/source-test/GateV2Test.mc` — `largeChunk`/`largeEnvelope` fixtures; `processMessage` large-chunk integrity test; **`receiveLight` test group** (large-chunk accept, size accounting, structural + head-integrity rejections); `maxReceivedLine` + `rcv:` `evidenceString` tests
+- `docs/gates.md` — §V3 **passed**: procedure, two-run watchdog history, measured table (α cap), watch witness, verdict matrix (observed row bold), two Epic-4 constraints; V3 status row
 - `_bmad-output/implementation-artifacts/deferred-work.md` — the two Story-1.4 items marked RESOLVED
 - `_bmad-output/implementation-artifacts/1-5-gate-v3-chunk-size-calibration-hardware.md` — this story (tasks, Dev Agent Record)
-- `_bmad-output/implementation-artifacts/sprint-status.yaml` — `1-5 → in-progress`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — `1-5 → review`

@@ -12,7 +12,7 @@ references this page. See architecture §"Validation gates" (AR27–AR31).
 |------|----------------|--------|--------|
 | **V1** | AMOLED screen-on for ≥60-min hands-off reading (+ dim-AON fallback legibility) | **passed-dim** (2026-06-11) | Lit-dim & legible 61 min hands-off; never OFF; one-button restore works. FR4 satisfied in its fallback form |
 | **V2** | Reliable repeated phone→watch sends (Android first-send bug defeated); bridge sufficiency (OQ2) | **passed** (2026-06-11) | 400/400 first-try ack-confirmed sends (200 × 2 encodings); bug not observed; OQ2 = keep stock plugin, base64 transport ([ADR 0002](decisions/0002-oq2-companion-bridge.md)) |
-| **V3** | Per-message chunk-size ceiling (`BLE_REQUEST_TOO_LARGE` threshold) | harness built; **pending hardware run** | Sweep mode + Stop + watch witness done; Strict ×3 clean, companion 77/77, CI image 21/21; awaiting Nerya's wireless sweep |
+| **V3** | Per-message chunk-size ceiling (`BLE_REQUEST_TOO_LARGE` threshold) | **passed** (2026-06-13) | Transport ceiling = phone serializer cap (α) 16 384 B serialized; safe working chunk **11 584 B binary / 15 448 B wire** (~1158 words). Tighter real limit: watch decode-watchdog → Epic 4 decodes incrementally, not in the BLE callback |
 | **V4** | 1-hour reading session battery drain vs ≤10%/hour target | not started | — |
 
 ## V1 — Hands-off screen-on (Story 1.3)
@@ -121,61 +121,91 @@ Transfers run under a foreground service (freeze evidence above). Add ProGuard
 _Procedure:_ sweep chunk sizes upward from ≤1 KB on the V2 harness; find the size-class
 rejection threshold (α phone-serializer cap / β `BLE_REQUEST_TOO_LARGE -102`); record the safe
 working chunk size in binary bytes, base64-wire bytes, and ~words/chunk.
-_Status:_ **pending hardware run** (harness + watch witness built, Strict `-l 3` clean ×3 targets;
-size-sweep logic unit-tested 9/9, full companion suite green). _Result:_ — (transcribe below).
+_Status:_ **passed** (2026-06-13, real Fenix 8 47 mm / firmware 22.35, API 6.0.2 ↔ Samsung
+SM-S938B / Android 16, wireless via Garmin Connect Mobile). _Result:_ two binding constraints found
+— a **phone-side transport ceiling** and, more tightly, a **watch-side decode-time watchdog**. Safe
+working chunk size **11 584 B binary / 15 448 B wire** (transport); Epic 4 must additionally decode
+**incrementally** (never a whole chunk in the BLE callback). Premise-rework flag: **not raised**
+(V2 already proved the channel; this is calibration).
 
 **Method.** Same harness, sweep mode: `GateV2Runner.runSweep` (`companion/lib/gate_v2/`) sends
-**M sends per size, all must ack to step up**; geometric-coarse (×2 from a ≤1 KB known-good floor)
-to the first reproduced rejection, then **bisect** the last-good→first-fail gap to pin the ceiling
-within the safety margin. Each rejection is **re-tested once** to separate a reproducible size
-ceiling from the Story-1.4 mode-a silent hang (suspect (c)). Size is parametrized by **target SPEC
-§5 binary bytes** (word length × count via `encodeChunk`), lifting the fixed-N record cap so the
-sweep can cross the ~12 KB base64 / 16 384 B serializer cap. Transport = **base64-String only**
-(ADR 0002; Run B `List<int>` not re-swept — re-running the rejected encoding adds no decision
-value). Per-send outcome is classified `{ack, sizeError(code), genericError(code), silentTimeout,
-successNoAckTimeout}`, recording whether the send future completed before the ack timeout so a
-timeout is attributable (deferred-work item #2, now resolved). Cancel/Stop seam added
-(deferred-work item #1, now resolved). **Wireless on real hardware only** (SDK 2.0.3 tethered bug).
-Watch side reports its independent **max-decoded-size witness** (largest SPEC §5 payload it
-successfully decoded), corroborating the phone-side last-good.
+**M=3 sends per size, all must ack to step up**; geometric-coarse (×2 from a 768 B known-good floor)
+to the first reproduced rejection, then **bisect** the last-good→first-fail gap. Each rejection is
+**re-tested once** to separate a reproducible ceiling from the Story-1.4 mode-a silent hang (c).
+Size is parametrized by **target SPEC §5 binary bytes** (word length × count via `encodeChunk`),
+lifting the fixed-N record cap so the sweep can cross the 16 384 B serializer cap. Transport =
+**base64-String only** (ADR 0002). Per-send outcome is classified `{ack, sizeError(code),
+genericError(code), silentTimeout, successNoAckTimeout}`, recording whether the send future
+completed before the ack timeout (deferred-work item #2 resolved). Cancel/Stop seam added
+(deferred-work item #1 resolved). **Wireless on real hardware only** (SDK 2.0.3 tethered bug).
 
-**The three rejection classes** (the gate's whole point — attribution, not just a number):
-- **(α) `FAILURE_MESSAGE_TOO_LARGE`** — SDK 2.0.3 serializer cap (~16 384 serialized bytes,
-  ≈12 KB binary for base64), phone-side, before BLE. **Very likely hit first** with the stock
-  plugin — a real bounding number for Epic 4.
-- **(β) `BLE_REQUEST_TOO_LARGE` (-102)** — undocumented BLE per-message cap, "may be lower" than
-  α. May return a code or just suppress delivery → a reproduced, size-monotonic `successNoAckTimeout`.
-- **(c) silent hang (mode a)** — size-independent reliability bug. A timeout that does NOT reproduce
-  at the same size is (c) noise, not the ceiling; re-test discipline separates it.
+> **Two-run history — the watchdog finding (AR15 vindicated).** The first sweep attempt **crashed
+> the watch app** at a multi-KB chunk: `Watchdog Tripped Error — Code Executed Too Long` in
+> `StreamDecoder.decodeChunk`/`isValidUtf8` (device `CIQ_LOG.YML`). The spike originally decoded the
+> **whole chunk synchronously in the BLE receive callback** (Story 1.4's integrity proof). On real
+> hardware the firmware watchdog (a per-callback instruction budget, ~120k–240k cycles, **device-
+> varying and absent in the simulator** — exactly AR15) kills the app; the kill is **uncatchable**,
+> so no receive guard can survive it. The Connect IQ community's only fix is to **slice heavy work
+> across timer ticks** (no threads). The watch was changed to **lighten-receive** — O(1) structural
+> validation + a bounded-prefix integrity touch + received-size witness + ack, **no full decode in
+> the callback** — which both (a) lets the sweep find the true *transport* ceiling, and (b) records
+> the watchdog as a first-class Epic-4 constraint. `processMessage` (full decode) remains the
+> host/CI integrity proof, where there is no watchdog.
 
-**Measured** (transcribe from the harness summary + watch witness after Nerya's run):
+**The rejection classes** (attribution is the gate's whole point):
+- **(α) `FAILURE_MESSAGE_TOO_LARGE`** — SDK 2.0.3 serializer cap, **16 384 serialized bytes**,
+  phone-side, before BLE. **This is the operative transport ceiling** (hit first, as predicted).
+- **(β) `BLE_REQUEST_TOO_LARGE` (-102)** — undocumented BLE per-message cap. **Above α** here: the
+  watch *received and acked* a 12 288 B chunk (witness below), so β is higher than α and never bit.
+- **(c) silent hang (mode a)** — not observed in this sweep.
+- **(watchdog)** — watch-side decode-time limit; **tighter than α** but only when decoding in the
+  callback, which Epic 4 will not do.
+
+**Measured** (29 sends; geometric coarse 768→6144 clean, 12288 rejected, then bisected):
 
 | Quantity | Binary bytes | base64-wire bytes |
 |---|---|---|
-| Last size that ack-confirmed all M sends | _TBD_ | _TBD_ |
-| First size whose rejection reproduced | _TBD_ | _TBD_ |
-| **Safe working chunk size** (last-good − margin) | **_TBD_** | **_TBD_** |
+| Last size that ack-confirmed all M=3 sends | 12 096 | 16 128 |
+| First size whose rejection reproduced (α) | 12 288 | 16 384 |
+| **Safe working chunk size** (last-good − 512 B margin) | **11 584** | **15 448** |
 
-- Rejection class: _α / β / c_ — code verbatim: `_TBD_`.
-- Safe-working margin: _TBD_ B (rationale: BLE round-trip variance + envelope-dict overhead
-  headroom below the binding cap).
-- **~words/chunk** at the safe working size: _TBD_ (assuming ~10 B/word = 5-byte SPEC §5 header +
-  ~5-char average word) — Epic 4's 200–500-word boundary chunker (AR23) adopts this directly.
-- Watch max-decoded-size witness: _TBD_ B (independent confirmation of the largest message that
-  crossed BLE).
+- Rejection class: **α — phone-side serializer cap**, code verbatim: `[FAILURE_MESSAGE_TOO_LARGE]`.
+  First-fail wire size is **exactly 16 384 B** = the documented SDK 2.0.3 cap.
+- Safe-working margin: **512 B** (BLE round-trip variance + envelope-dict overhead headroom below
+  the binding cap).
+- **~words/chunk** at the safe working size: **~1 158** (at ~10 B/word = 5-byte SPEC §5 header +
+  ~5-char average word). Epic 4's 200–500-word boundary chunker (AR23) sits **far under** this — a
+  500-word chunk (~5 KB) has comfortable headroom on the transport side.
+- Watch received-size witness: **`rcv:12288B`**, R/V/A **29/29/29** (zero loss). The watch received
+  and acked a 12 288 B chunk that the phone's serializer *rejected* — confirming **β (BLE) > α
+  (phone)** and that α is the operative transport ceiling. (At the 16 384 B boundary the plugin
+  reports `FAILURE_MESSAGE_TOO_LARGE` to the phone even though the watch still received the message;
+  the phone's ack-matching correctly discards the un-acked-from-its-view send — counted as the
+  rejection.)
 
-**Verdict matrix** (bold the observed row after the run):
+**Verdict matrix** (observed row in bold):
 
 | Observed | Verdict | Consequence (Epic 4) |
 |---|---|---|
-| Clean BLE ceiling (β, `-102`) found below the phone cap | V3 calibrated — BLE-bounded | `transfer_engine` chunk size = safe-working (BLE-bound); fork to native bytes won't help |
-| Phone serializer cap (α) hit first, no BLE cap below it | V3 calibrated — transport-cap-bounded | Safe-working below α; **ADR 0002 escape hatch**: fork to SDK 2.4.0 native bytes would raise it |
-| Only a silent hang (c) appears, no size-class rejection | V3 conservative — not BLE-bounded | Adopt a conservative size with margin below the phone cap; re-measure in Epic 4 |
+| Clean BLE ceiling (β, `-102`) found below the phone cap | V3 calibrated — BLE-bounded | chunk size = safe-working (BLE-bound); fork to native bytes won't help |
+| **Phone serializer cap (α) hit first, β BLE cap above it** | **V3 calibrated — transport-cap-bounded at 16 384 B serialized; safe working 11 584 B binary** | **`transfer_engine` chunk-size hook ≤ 11 584 B binary; ADR 0002 escape hatch (SDK 2.4.0 native bytes) would raise α if ever needed — not needed at 200–500-word chunks** |
+| Only a silent hang (c) appears, no size-class rejection | V3 conservative — not BLE-bounded | Adopt a conservative size with margin; re-measure in Epic 4 |
 | No rejection at all below the hard cap | V3 conservative — cap-bounded | Adopt the cap-bounded size; chunk to taste within it |
 
+**Product implication (carry to Epic 4).** Two calibrated constraints, both with large headroom for
+the planned 200–500-word (~2–5 KB) chunk:
+1. **Transport:** keep a single `chunkData` message ≤ **11 584 B binary** (15 448 B wire) — the
+   `transfer_engine` chunk-size calibration hook (AR23, architecture lines 423/514) adopts this; the
+   provisional numbers there are now empirical.
+2. **Decode (the tighter, hardware-only constraint):** `ChunkedWordSource` **must not decode a whole
+   chunk in the BLE receive callback** — decode incrementally / timer-sliced (Connect IQ has no
+   threads; the synchronous decode trips the watchdog well below 11 584 B). Persist the raw chunk on
+   receipt, decode lazily during reading. This is the binding real-world limit on *how* chunks are
+   processed, even though chunk *size* can be large.
+
 > V3 is a **calibration**, not a pass/fail premise check — V2 already proved the channel (§V2:
-> 400/400, no `TOO_LARGE`/-102 at ~1 KB). A conservative-but-working size satisfies AC1's "safe
-> working chunk size is recorded"; no premise-rework flag is raised here.
+> 400/400). The safe working size + the decode-incrementally constraint satisfy AC1; no
+> premise-rework flag raised.
 
 ## V4 — Reading-session battery (Story 3.9)
 _Procedure:_ 60-min continuous session on hardware (screen on, sync connected); measure drain.

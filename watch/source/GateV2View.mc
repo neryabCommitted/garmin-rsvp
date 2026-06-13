@@ -155,6 +155,133 @@ module GateV2 {
         return r;
     }
 
+    // Gate V3 lighten-receive: the size sweep measures the TRANSPORT ceiling
+    // (largest message that crosses BLE and is received), NOT decode time. A
+    // full per-word decode in the receive callback (processMessage) trips the
+    // device watchdog on large chunks — uncatchable, hardware-confirmed
+    // Story 1.5 — and would mask the transport ceiling AC1 asks for. Connect
+    // IQ has no threads, so heavy work must be timer-sliced (Epic 4's
+    // ChunkedWordSource decodes incrementally, never a whole chunk in the BLE
+    // callback). So the watch does O(1) work here: cheap structural envelope
+    // validation, a bounded-prefix integrity touch, the received-size witness,
+    // and the ack. processMessage (full decode) stays the host/CI integrity
+    // proof, where there is no watchdog. Pure — no Storage/Communications.
+    const RECEIVE_PREFIX_B64 = 64; // base64 chars decoded for the head touch (→ 48 bytes)
+
+    function receiveLight(data as Object?) as ProcessResult {
+        var r = new ProcessResult();
+        if (!(data instanceof Lang.Dictionary)) {
+            r.err = ERR_NOT_DICT;
+            return r;
+        }
+        var d = data as Dictionary;
+        var p = d[Protocol.KEY_PAYLOAD] as Lang.Object?;
+        r.enc = encodingLabel(p);
+
+        var structural = validateChunkEnvelopeLight(d, p);
+        if (structural != null) {
+            r.err = structural;
+            return r;
+        }
+
+        var binLen;
+        if (p instanceof Lang.String) {
+            var s = p as String;
+            binLen = base64BinaryLen(s);
+            // Bounded O(1) integrity touch: the head must decode and its first
+            // SPEC §5 record header must be sane. Proves real chunk bytes
+            // arrived, not a blob that merely deserialized as a string.
+            if (!headDecodes(s)) {
+                r.err = ERR_BAD_PAYLOAD;
+                return r;
+            }
+        } else {
+            // Run B (Number Array) is not swept (ADR 0002); record element count.
+            binLen = (p as Array).size();
+        }
+
+        r.ok = true;
+        r.off = d[Protocol.KEY_OFFSET] as Number;
+        r.bytesLen = binLen;
+        return r;
+    }
+
+    // Cheap structural chunkData-envelope validation — version, type, known
+    // keys, fp/off/n presence+range — WITHOUT decoding the payload (our
+    // transport p is a base64 String / Number Array, not yet a ByteArray, so
+    // Protocol.validateEnvelope's ByteArray check can't be reused here).
+    function validateChunkEnvelopeLight(d as Dictionary, p as Object?) as String? {
+        var v = d[Protocol.KEY_VERSION];
+        if (!(v instanceof Lang.Number) || (v as Number) != Protocol.PROTOCOL_VERSION) {
+            return Protocol.ERR_VERSION_MISMATCH;
+        }
+        var t = d[Protocol.KEY_TYPE];
+        if (!(t instanceof Lang.String) || !(t as String).equals(Protocol.MSG_CHUNK_DATA)) {
+            return Protocol.ERR_UNKNOWN_TYPE;
+        }
+        var keys = d.keys();
+        for (var i = 0; i < keys.size(); i++) {
+            var key = keys[i];
+            if (!(key instanceof Lang.String)) { return Protocol.ERR_MALFORMED_ENVELOPE; }
+            var k = key as String;
+            if (!(k.equals(Protocol.KEY_TYPE) || k.equals(Protocol.KEY_VERSION)
+                    || k.equals(Protocol.KEY_FINGERPRINT) || k.equals(Protocol.KEY_OFFSET)
+                    || k.equals(Protocol.KEY_COUNT) || k.equals(Protocol.KEY_PAYLOAD))) {
+                return Protocol.ERR_MALFORMED_ENVELOPE;
+            }
+        }
+        var fp = d[Protocol.KEY_FINGERPRINT] as Lang.Object?;
+        var off = d[Protocol.KEY_OFFSET] as Lang.Object?;
+        var n = d[Protocol.KEY_COUNT] as Lang.Object?;
+        if (fp == null || !Protocol.isValidFingerprint(fp)) {
+            return Protocol.ERR_MALFORMED_ENVELOPE;
+        }
+        if (!(off instanceof Lang.Number) || (off as Number) < 0) {
+            return Protocol.ERR_MALFORMED_ENVELOPE;
+        }
+        if (!(n instanceof Lang.Number) || (n as Number) < 1) {
+            return Protocol.ERR_MALFORMED_ENVELOPE;
+        }
+        if (p instanceof Lang.String) {
+            if ((p as String).length() == 0) { return Protocol.ERR_MALFORMED_ENVELOPE; }
+        } else if (!(p instanceof Lang.Array)) {
+            return Protocol.ERR_MALFORMED_ENVELOPE;
+        }
+        return null;
+    }
+
+    // Binary size of a base64 string, read in O(1) from its length + padding —
+    // never scans the whole (multi-KB) string (that itself risks the watchdog).
+    function base64BinaryLen(s as String) as Number {
+        var len = s.length();
+        if (len < 4 || len % 4 != 0) { return 0; }
+        var tail = s.substring(len - 2, len) as String;
+        var tc = tail.toCharArray();
+        var pad = 0;
+        if (tc[1].toNumber() == 61) { pad++; }      // trailing '='
+        if (tc[0].toNumber() == 61) { pad++; }
+        return (len / 4) * 3 - pad;
+    }
+
+    // Bounded integrity touch: decode only the first RECEIVE_PREFIX_B64 base64
+    // chars (a base64 prefix carries no padding, so it decodes cleanly) and
+    // check the first SPEC §5 record header is in range. O(1) regardless of
+    // chunk size — no watchdog risk.
+    function headDecodes(s as String) as Boolean {
+        var len = s.length();
+        var take = len < RECEIVE_PREFIX_B64 ? len : RECEIVE_PREFIX_B64;
+        take = (take / 4) * 4; // whole base64 units only
+        if (take < 4) { return false; }
+        var prefix = s.substring(0, take) as String;
+        var bytes = base64ToByteArray(prefix); // guards convertEncodedString internally
+        if (bytes == null || bytes.size() < Protocol.RECORD_HEADER_BYTES) {
+            return false;
+        }
+        var wordLen = bytes[0] as Number;
+        var orpPivot = bytes[2] as Number;
+        return wordLen >= 1 && wordLen <= 255 && orpPivot < wordLen;
+    }
+
     // Compact label for a caught exception's message — the receive
     // catch-all must record SOMETHING usable; "exc" only when the platform
     // gives nothing. Truncated to stay within the small live display.
@@ -188,21 +315,23 @@ module GateV2 {
             + " A:" + acked.toString();
     }
 
-    // Max-decoded-size witness line (gate V3): the largest SPEC §5 payload the
-    // watch successfully decoded this run, in bytes. A bounded counter — no
-    // growing log (AR25 logging-budget discipline).
-    function maxDecodedLine(maxDecoded as Number) as String {
-        return "max:" + maxDecoded.toString() + "B";
+    // Max-received-size witness line (gate V3): the largest chunk (SPEC §5
+    // binary bytes) the watch received + acked this run. Under lighten-receive
+    // this is the watch's independent witness of the transport ceiling — the
+    // largest message that crossed BLE. A bounded counter — no growing log
+    // (AR25 logging-budget discipline).
+    function maxReceivedLine(maxReceived as Number) as String {
+        return "rcv:" + maxReceived.toString() + "B";
     }
 
     // Evidence wire form persisted at exit — a compact String, not nested
     // arrays (Storage value-type polys differ between SDK 8.4.0/9.1.0).
     function evidenceString(received as Number, valid as Number, invalid as Number,
-            acked as Number, ackErrors as Number, maxDecoded as Number,
+            acked as Number, ackErrors as Number, maxReceived as Number,
             enc as String, err as String?) as String {
         return "r:" + received.toString() + ",v:" + valid.toString()
             + ",i:" + invalid.toString() + ",a:" + acked.toString()
-            + ",ae:" + ackErrors.toString() + ",md:" + maxDecoded.toString()
+            + ",ae:" + ackErrors.toString() + ",rcv:" + maxReceived.toString()
             + ",enc:" + enc + ",err:" + (err == null ? "none" : err);
     }
 }
@@ -259,7 +388,7 @@ class GateV2View extends WatchUi.View {
             Graphics.TEXT_JUSTIFY_CENTER);
 
         dc.drawText(cx, cy + small * 3, Graphics.FONT_XTINY,
-            GateV2.maxDecodedLine(_app.maxDecoded()), Graphics.TEXT_JUSTIFY_CENTER);
+            GateV2.maxReceivedLine(_app.maxReceived()), Graphics.TEXT_JUSTIFY_CENTER);
 
         if (_app.resetArmed()) {
             dc.drawText(cx, cy + small * 4, Graphics.FONT_XTINY,

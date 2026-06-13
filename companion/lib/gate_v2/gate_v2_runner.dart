@@ -350,11 +350,13 @@ final class GateV3SweepSummary {
     required this.firstFailWireBytes,
     required this.rejectionClass,
     required this.rejectionCode,
+    this.rejectionOutcome,
     required this.safeWorkingBytes,
     required this.safeWorkingWireBytes,
     required this.perStep,
     required this.totalWallClock,
     required this.cancelled,
+    this.bisected = false,
   });
 
   final PayloadEncoding encoding;
@@ -395,6 +397,26 @@ final class GateV3SweepSummary {
   /// True when [GateV2Runner.cancel] stopped the sweep before it converged.
   final bool cancelled;
 
+  /// True when the last-good→first-fail gap was bisected (only happens for a
+  /// non-destructive code rejection). False when the sweep stopped at a
+  /// timeout-class cliff — the watch may have crashed (decode watchdog), so
+  /// first-fail is the coarse step, not a pinned threshold.
+  final bool bisected;
+
+  /// The reproduced rejection's per-send outcome (null if no ceiling found) —
+  /// the precise signature behind [rejectionClass].
+  final SweepSendOutcome? rejectionOutcome;
+
+  /// True when the reproduced rejection was SUCCESS-without-ack: the watch
+  /// received the chunk (send future completed) but never acked, reproducibly.
+  /// On real hardware this is the signature of the watch going unresponsive
+  /// mid-decode — the decode-time watchdog crash (hardware-confirmed Story
+  /// 1.5; the device CIQ_LOG + the watch `max:<n>B` witness confirm it).
+  /// last-good is then the safe answer; first-fail is the coarse cliff, not a
+  /// bisected threshold.
+  bool get watchdogSuspect =>
+      rejectionOutcome == SweepSendOutcome.successNoAckTimeout;
+
   /// ~words/chunk the safe working size affords Epic 4's 200–500-word boundary
   /// chunker (AR23), at [avgWordBytes] bytes/word.
   int? get safeWorkingWords =>
@@ -417,6 +439,13 @@ final class GateV3SweepSummary {
           '(at ~$avgWordBytes B/word)',
       'sweep sends:       ${perStep.length} (acked: $acked)'
           '${cancelled ? ' — CANCELLED before convergence' : ''}',
+      if (watchdogSuspect)
+        'NOTE: ceiling is SUCCESS-without-ack (watch went unresponsive) — '
+            'consistent with the watch-side decode watchdog. last-good is the '
+            'safe answer; confirm via device CIQ_LOG + watch max:<n>B witness.'
+      else if (firstFailBytes != null && !bisected)
+        'NOTE: ceiling not bisected (timeout-class) — first-fail is the coarse '
+            'step, last-good is the safe answer.',
     ].join('\n');
   }
 }
@@ -721,6 +750,9 @@ final class GateV2Runner {
     int? firstFail;
     var rejectionClass = RejectionClass.none;
     String? rejectionCode;
+    SweepSendOutcome? rejectionOutcome;
+    var bisectable = false;
+    var bisected = false;
 
     try {
       // ── Coarse (geometric) phase ──
@@ -745,13 +777,26 @@ final class GateV2Runner {
         }
         // Reproduced → the ceiling is between lastGood and this size.
         firstFail = size;
+        final reproduced = _reproducedFail(first, retest);
         rejectionClass = _classify(first, retest);
         rejectionCode = _rejectionCode(first, retest);
+        rejectionOutcome = reproduced?.outcome;
+        // Bisect ONLY a non-destructive rejection. A clean size-class/generic
+        // CODE means the watch answered and is alive — safe to bisect. A
+        // reproduced TIMEOUT may be an uncatchable watch-side crash (the
+        // decode-time watchdog, hardware-confirmed Story 1.5): the watch app
+        // then dies and every further send fails regardless of size, so
+        // bisecting would walk a dead channel and report a meaningless
+        // threshold. Stop at last-good — the largest size the watch survived.
+        bisectable = reproduced != null &&
+            (reproduced.outcome == SweepSendOutcome.sizeError ||
+                reproduced.outcome == SweepSendOutcome.genericError);
         break;
       }
 
       // ── Bisect phase ──
-      if (lastGood != null && firstFail != null && !_cancelled) {
+      if (bisectable && lastGood != null && firstFail != null && !_cancelled) {
+        bisected = true;
         _sweepPhase = 'bisect';
         var lo = lastGood;
         var hi = firstFail;
@@ -772,6 +817,7 @@ final class GateV2Runner {
           hi = mid;
           rejectionClass = _classify(first, retest);
           rejectionCode = _rejectionCode(first, retest);
+          rejectionOutcome = _reproducedFail(first, retest)?.outcome;
         }
         lastGood = lo;
         firstFail = hi;
@@ -795,12 +841,14 @@ final class GateV2Runner {
       firstFailWireBytes: firstFail == null ? null : _wireBytesFor(firstFail),
       rejectionClass: rejectionClass,
       rejectionCode: rejectionCode,
+      rejectionOutcome: rejectionOutcome,
       safeWorkingBytes: safeWorking,
       safeWorkingWireBytes:
           safeWorking == null ? null : _wireBytesFor(safeWorking),
       perStep: List.unmodifiable(steps),
       totalWallClock: totalWatch.elapsed,
       cancelled: _cancelled,
+      bisected: bisected,
     );
   }
 

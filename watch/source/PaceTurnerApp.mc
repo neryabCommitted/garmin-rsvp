@@ -25,7 +25,7 @@ class PaceTurnerApp extends Application.AppBase {
     private var _invalid as Number;
     private var _acked as Number;
     private var _ackErrors as Number;
-    private var _maxDecoded as Number;
+    private var _maxReceived as Number;
     private var _lastError as String?;
     private var _lastEncoding as String;
     private var _resetArmedAt as Number?;
@@ -42,7 +42,7 @@ class PaceTurnerApp extends Application.AppBase {
         _invalid = 0;
         _acked = 0;
         _ackErrors = 0;
-        _maxDecoded = 0;
+        _maxReceived = 0;
         _lastError = null;
         _lastEncoding = "?";
         _resetArmedAt = null;
@@ -71,7 +71,7 @@ class PaceTurnerApp extends Application.AppBase {
         try {
             Storage.setValue(EVIDENCE_KEY, GateV2.evidenceString(
                 _received, _valid, _invalid, _acked, _ackErrors,
-                _maxDecoded, _lastEncoding, _lastError));
+                _maxReceived, _lastEncoding, _lastError));
         } catch (e) {
             System.println("GateV2: evidence persist failed");
         }
@@ -81,22 +81,25 @@ class PaceTurnerApp extends Application.AppBase {
         return [new GateV2View(self), new GateV2Delegate(self)];
     }
 
-    // System callback for every phone message. Broad catch on purpose: this
-    // spike's receive callback must never crash the run it is recording
-    // (deferred-work V1 robustness #5). State is bounded counters plus two
-    // short strings — no growing in-memory log (#6) and no per-message
-    // logging or Storage writes in the hot path (logging budget; a mid-run
-    // Storage write would also pollute the round-trip timing the phone is
-    // measuring).
+    // System callback for every phone message. Uses receiveLight (O(1)
+    // structural validate + bounded-prefix integrity touch + ack) — NOT the
+    // full per-word decode, which trips the uncatchable device watchdog on
+    // large chunks (Story 1.5) that no try/catch can contain. The broad catch
+    // still guards against ordinary exceptions so the spike's receive callback
+    // never crashes the run it is recording (deferred-work V1 robustness #5).
+    // State is bounded counters plus two short strings — no growing in-memory
+    // log (#6) and no per-message logging or Storage writes in the hot path
+    // (logging budget; a mid-run Storage write would also pollute the
+    // round-trip timing the phone is measuring).
     function onPhoneMessage(msg as Communications.PhoneAppMessage) as Void {
         try {
             _received++;
-            var result = GateV2.processMessage(msg.data);
+            var result = GateV2.receiveLight(msg.data);
             _lastEncoding = result.enc;
             if (result.ok && result.off != null) {
                 _valid++;
-                if (result.bytesLen > _maxDecoded) {
-                    _maxDecoded = result.bytesLen;
+                if (result.bytesLen > _maxReceived) {
+                    _maxReceived = result.bytesLen;
                 }
                 transmitAck(result.off as Number);
             } else {
@@ -125,7 +128,7 @@ class PaceTurnerApp extends Application.AppBase {
     function receivedCount() as Number { return _received; }
     function validCount() as Number { return _valid; }
     function ackedCount() as Number { return _acked; }
-    function maxDecoded() as Number { return _maxDecoded; }
+    function maxReceived() as Number { return _maxReceived; }
     function lastError() as String? { return _lastError; }
     function lastEncoding() as String { return _lastEncoding; }
 
@@ -152,7 +155,7 @@ class PaceTurnerApp extends Application.AppBase {
         _invalid = 0;
         _acked = 0;
         _ackErrors = 0;
-        _maxDecoded = 0;
+        _maxReceived = 0;
         _lastError = null;
         _lastEncoding = "?";
         _resetArmedAt = null;

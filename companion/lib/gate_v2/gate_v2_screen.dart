@@ -155,6 +155,8 @@ class _GateV2ScreenState extends State<GateV2Screen> {
         );
         _runner = runner;
         final summary = await runner.run();
+        debugPrint('GATEV2 SUMMARY BEGIN\n${summary.transcript()}\n'
+            'GATEV2 SUMMARY END');
         if (mounted) {
           setState(() => _summary = summary);
         }
@@ -165,6 +167,13 @@ class _GateV2ScreenState extends State<GateV2Screen> {
           bridge: bridge,
           encoding: PayloadEncoding.base64String,
           onSweepProgress: (p) {
+            // Mirror every step to the device log (`flutter run` / adb logcat)
+            // so the run is readable without transcribing the screen.
+            debugPrint('GATEV3 step ph=${p.phase} size=${p.currentBytes}B/'
+                '${p.currentWireBytes}Bwire sends=${p.sends} acks=${p.acks} '
+                'lastGood=${p.lastGoodBytes ?? '-'} '
+                'out=${p.lastOutcome?.name ?? '-'}'
+                '${p.lastCode == null ? '' : ' code=${p.lastCode}'}');
             if (mounted) {
               setState(() => _sweepProgress = p);
             }
@@ -176,6 +185,8 @@ class _GateV2ScreenState extends State<GateV2Screen> {
           maxBytes: maxBytes,
           sendsPerSize: sendsPerSize,
         );
+        debugPrint('GATEV3 SUMMARY BEGIN\n${summary.transcript()}\n'
+            'GATEV3 SUMMARY END');
         if (mounted) {
           setState(() => _sweepSummary = summary);
         }
