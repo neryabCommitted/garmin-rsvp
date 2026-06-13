@@ -4,9 +4,11 @@ import Toybox.Test;
 
 // Tests for the Gate V2 spike's pure helpers (Story 1.4). The spike itself is
 // hardware-judged; only the extracted pure functions are unit-tested.
-// NEVER feed malformed input to the base64 path — convertEncodedString raises
-// an UNCATCHABLE system error on SDK 8.4.0 (the CI image); well-formed
-// fixtures only (Story 1.2 lesson).
+// NEVER feed malformed input DIRECTLY to convertEncodedString — it raises an
+// UNCATCHABLE system error on SDK 8.4.0 (the CI image; Story 1.2 lesson).
+// base64ToByteArray is safe for malformed input: its isPlausibleBase64 guard
+// rejects garbage before the SDK call — which is exactly what the malformed
+// cases below exercise.
 
 module GateV2TestSupport {
 
@@ -74,6 +76,94 @@ function gateV2Base64RoundTripTest(logger as Test.Logger) as Boolean {
     if (decoded == null) { logger.error("well-formed base64 rejected"); return false; }
     if (!ProtocolTestSupport.bytesEqual(decoded, payload)) {
         logger.error("round trip differs from spec example bytes"); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2IsPlausibleBase64Test(logger as Test.Logger) as Boolean {
+    logger.debug("isPlausibleBase64: alphabet, length, and padding structure");
+    var goods = ["QUJD", "QQ==", "QUI=", "ab+/", "AbC9efGh"];
+    for (var i = 0; i < goods.size(); i++) {
+        if (!GateV2.isPlausibleBase64(goods[i] as String)) {
+            logger.error("rejected well-formed: " + goods[i]); return false;
+        }
+    }
+    var real = GateV2TestSupport.toBase64(ProtocolTestSupport.examplePayload());
+    if (!GateV2.isPlausibleBase64(real)) {
+        logger.error("rejected real encoded payload"); return false;
+    }
+    var bads = ["", "abc", "####", "ab!d", "a=bc", "ab=c", "QUJD\n123", "=AAA"];
+    for (var i = 0; i < bads.size(); i++) {
+        if (GateV2.isPlausibleBase64(bads[i] as String)) {
+            logger.error("accepted malformed: " + bads[i]); return false;
+        }
+    }
+    return true;
+}
+
+(:test)
+function gateV2Base64RejectsMalformedTest(logger as Test.Logger) as Boolean {
+    logger.debug("base64ToByteArray: malformed input degrades to null, never crashes");
+    if (GateV2.base64ToByteArray("####") != null) {
+        logger.error("bad alphabet accepted"); return false;
+    }
+    if (GateV2.base64ToByteArray("ab=c") != null) {
+        logger.error("interior padding accepted"); return false;
+    }
+    if (GateV2.base64ToByteArray("") != null) {
+        logger.error("empty string accepted"); return false;
+    }
+    // And the guard does not break processMessage's Run A path on garbage.
+    var msg = GateV2TestSupport.exampleEnvelope("not-base64-!");
+    var r = GateV2.processMessage(msg);
+    if (r.ok || !GateV2.ERR_BAD_PAYLOAD.equals(r.err)) {
+        logger.error("malformed String payload accepted"); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2ErrLabelTest(logger as Test.Logger) as Boolean {
+    logger.debug("errLabel: null/empty fallback, pass-through, truncation");
+    if (!GateV2.errLabel(null).equals("exc")) {
+        logger.error("null message"); return false;
+    }
+    if (!GateV2.errLabel("").equals("exc")) {
+        logger.error("empty message"); return false;
+    }
+    if (!GateV2.errLabel("boom").equals("boom")) {
+        logger.error("short message altered"); return false;
+    }
+    var long = "Unexpected Type Error in callback frame";
+    var label = GateV2.errLabel(long);
+    if (label.length() != GateV2.ERR_LABEL_MAX) {
+        logger.error("not truncated to max: " + label); return false;
+    }
+    if (!(long.substring(0, GateV2.ERR_LABEL_MAX) as String).equals(label)) {
+        logger.error("truncation altered content"); return false;
+    }
+    return true;
+}
+
+(:test)
+function gateV2ArmWindowOpenTest(logger as Test.Logger) as Boolean {
+    logger.debug("armWindowOpen: disarmed, inside, boundary, expired, wraparound");
+    if (GateV2.armWindowOpen(null, 1000, 3000)) {
+        logger.error("disarmed window open"); return false;
+    }
+    if (!GateV2.armWindowOpen(1000, 1000, 3000)) {
+        logger.error("same-tick press rejected"); return false;
+    }
+    if (!GateV2.armWindowOpen(1000, 4000, 3000)) {
+        logger.error("boundary press rejected"); return false;
+    }
+    if (GateV2.armWindowOpen(1000, 4001, 3000)) {
+        logger.error("expired window open"); return false;
+    }
+    // System.getTimer() wraparound: now < armedAt must close the window.
+    if (GateV2.armWindowOpen(1000, 500, 3000)) {
+        logger.error("wraparound window open"); return false;
     }
     return true;
 }

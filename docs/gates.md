@@ -92,8 +92,9 @@ measurement.
 - Encoding verdict: base64-String wins decisively — the SDK's per-element array serialization costs
   ~64% more wall-clock than base64's 33% size inflation. Run B's watch live counters were zeroed
   mid-run by a START press (~chunk 72): final watch display `R:128 V:128 A:129` covers the
-  post-reset window (`A` leads `V` by one in-flight ack callback straddling the reset); phone-side
-  ack accounting spans the full run and is the authoritative AC1 measure.
+  post-reset window (`A` leading `V` is consistent with one in-flight ack callback straddling
+  the reset — the mechanism is inferred, not verified); phone-side ack accounting spans the
+  full run and is the authoritative AC1 measure.
 - Bonus evidence: watch→phone ack channel (Epic 4's position-sync direction) lossless across both
   runs; no `FAILURE_MESSAGE_TOO_LARGE` / `BLE_REQUEST_TOO_LARGE (-102)` at ~1 KB (V3 starts its
   sweep from a known-good size).

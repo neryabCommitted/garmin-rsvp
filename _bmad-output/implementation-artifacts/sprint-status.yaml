@@ -1,5 +1,5 @@
 # generated: 2026-06-09
-# last_updated: 2026-06-11  # story 1.4 review (gate V2 passed, OQ2 = keep stock bridge); story 1.3 done
+# last_updated: 2026-06-11  # story 1.4 done (code review: 13 patches applied, 2 deferred); gate V2 passed, OQ2 = keep stock bridge
 # project: garmin_RSVP
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-11
+last_updated: 2026-06-13
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -47,8 +47,8 @@ development_status:
   1-1-monorepo-dual-scaffolds-dev-key-green-ci: done
   1-2-protocol-spec-md-and-mirrored-constants: done
   1-3-gate-v1-hands-off-screen-on-feasibility-hardware: done
-  1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware: review
-  1-5-gate-v3-chunk-size-calibration-hardware: backlog
+  1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware: done
+  1-5-gate-v3-chunk-size-calibration-hardware: ready-for-dev
   epic-1-retrospective: optional
 
   # ── Epic 2: Phone Library & Book Conversion ──

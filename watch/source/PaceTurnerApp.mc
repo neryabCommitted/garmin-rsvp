@@ -16,6 +16,10 @@ class PaceTurnerApp extends Application.AppBase {
     // string; the shared StorageKeys module is an Epic 4 deliverable.
     private const EVIDENCE_KEY = "gateV2RunLog";
 
+    // Two-press reset window: one accidental START must not destroy a run's
+    // evidence (it destroyed Run B's watch ledger at ~chunk 72).
+    private const RESET_ARM_WINDOW_MS = 3000;
+
     private var _received as Number;
     private var _valid as Number;
     private var _invalid as Number;
@@ -23,6 +27,12 @@ class PaceTurnerApp extends Application.AppBase {
     private var _ackErrors as Number;
     private var _lastError as String?;
     private var _lastEncoding as String;
+    private var _resetArmedAt as Number?;
+
+    // Counter generation, bumped on every reset: ack listener callbacks from
+    // before a reset are discarded so a straddling ack cannot skew the fresh
+    // window (Run B's display showed A leading V exactly this way).
+    private var _gen as Number;
 
     function initialize() {
         AppBase.initialize();
@@ -33,6 +43,8 @@ class PaceTurnerApp extends Application.AppBase {
         _ackErrors = 0;
         _lastError = null;
         _lastEncoding = "?";
+        _resetArmedAt = null;
+        _gen = 0;
     }
 
     function onStart(state as Dictionary?) as Void {
@@ -88,15 +100,19 @@ class PaceTurnerApp extends Application.AppBase {
             }
         } catch (e) {
             _invalid++;
-            _lastError = "exc";
+            _lastError = GateV2.errLabel(e.getErrorMessage());
         }
     }
 
-    function onAckComplete() as Void {
+    // Generation-tagged ack callbacks: a stale generation means the counters
+    // were reset while this ack was in flight — discard it.
+    function onAckComplete(gen as Number) as Void {
+        if (gen != _gen) { return; }
         _acked++;
     }
 
-    function onAckError() as Void {
+    function onAckError(gen as Number) as Void {
+        if (gen != _gen) { return; }
         _ackErrors++;
         _lastError = "ackFail";
     }
@@ -107,7 +123,23 @@ class PaceTurnerApp extends Application.AppBase {
     function lastError() as String? { return _lastError; }
     function lastEncoding() as String { return _lastEncoding; }
 
-    // START resets everything so Run A and Run B are measured separately.
+    // START: first press arms the reset, a second within the window performs
+    // it — so Run A and Run B are measured separately, but one accidental
+    // press cannot zero a live ledger. Window logic is pure-tested in GateV2.
+    function requestReset() as Void {
+        var now = System.getTimer();
+        if (GateV2.armWindowOpen(_resetArmedAt, now, RESET_ARM_WINDOW_MS)) {
+            resetCounters();
+        } else {
+            _resetArmedAt = now;
+        }
+    }
+
+    function resetArmed() as Boolean {
+        return GateV2.armWindowOpen(
+            _resetArmedAt, System.getTimer(), RESET_ARM_WINDOW_MS);
+    }
+
     function resetCounters() as Void {
         _received = 0;
         _valid = 0;
@@ -116,6 +148,8 @@ class PaceTurnerApp extends Application.AppBase {
         _ackErrors = 0;
         _lastError = null;
         _lastEncoding = "?";
+        _resetArmedAt = null;
+        _gen++;
     }
 
     private function transmitAck(off as Number) as Void {
@@ -125,7 +159,14 @@ class PaceTurnerApp extends Application.AppBase {
             GateV2.ACK_KEY => off,
             GateV2.ACK_OK_KEY => true
         };
-        Communications.transmit(ack, null, new GateV2AckListener(self));
+        // Own guard: a throwing transmit is an ack failure, not an invalid
+        // chunk — without it one message would count both valid and invalid
+        // via the callback's outer catch.
+        try {
+            Communications.transmit(ack, null, new GateV2AckListener(self, _gen));
+        } catch (e) {
+            onAckError(_gen);
+        }
     }
 }
 
@@ -134,17 +175,19 @@ class PaceTurnerApp extends Application.AppBase {
 class GateV2AckListener extends Communications.ConnectionListener {
 
     private var _app as PaceTurnerApp;
+    private var _gen as Number;
 
-    function initialize(app as PaceTurnerApp) {
+    function initialize(app as PaceTurnerApp, gen as Number) {
         ConnectionListener.initialize();
         _app = app;
+        _gen = gen;
     }
 
     function onComplete() as Void {
-        _app.onAckComplete();
+        _app.onAckComplete(_gen);
     }
 
     function onError() as Void {
-        _app.onAckError();
+        _app.onAckError(_gen);
     }
 }

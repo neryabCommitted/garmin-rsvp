@@ -24,7 +24,26 @@ enum FakeAction {
   /// Send future completes (the SDK's `SUCCESS`) but no ack ever arrives —
   /// the success-is-not-success case AC1 guards against.
   successNoAck,
+
+  /// Ack arrives but for the wrong offset — must be ignored, not matched.
+  ackWrongOffset,
+
+  /// Ack arrives with the right offset but `ok: false` — must be ignored.
+  ackNotOk,
+
+  /// The matching ack arrives twice — the duplicate must be discarded.
+  ackTwice,
+
+  /// The stream emits an error event (the plugin's `Map.from` mapper throws
+  /// on a non-Map inbound), then the ack arrives normally.
+  streamErrorThenAck,
+
+  /// Ack arrives and the attempt settles, then the send future errors late.
+  ackThenLateError,
 }
+
+/// What [FakeBridge.reinit] does when the defense calls it.
+enum ReinitBehavior { succeed, throwError, hang }
 
 /// Scripted [SpikeBridge]: the [script] decides each attempt's fate keyed by
 /// chunk offset and 1-based attempt number for that offset.
@@ -37,6 +56,7 @@ class FakeBridge implements SpikeBridge {
       StreamController<Map<String, dynamic>>.broadcast();
   final List<Map<String, Object?>> sent = [];
   final Map<int, int> _attemptsByOffset = {};
+  ReinitBehavior reinitBehavior = ReinitBehavior.succeed;
   int reinitCalls = 0;
   int inFlight = 0;
   int maxInFlight = 0;
@@ -45,8 +65,23 @@ class FakeBridge implements SpikeBridge {
   Stream<Map<String, dynamic>> get messages => _controller.stream;
 
   @override
-  Future<void> reinit() async {
+  Future<void> reinit() {
     reinitCalls++;
+    switch (reinitBehavior) {
+      case ReinitBehavior.succeed:
+        return Future<void>.value();
+      case ReinitBehavior.throwError:
+        return Future<void>.error(SpikeSendException('[REINIT_FAILED]'));
+      case ReinitBehavior.hang:
+        return Completer<void>().future;
+    }
+  }
+
+  void _ack(int offset, {bool ok = true}) {
+    _controller.add(<String, dynamic>{
+      GateV2Runner.ackOffsetKey: offset,
+      GateV2Runner.ackOkKey: ok,
+    });
   }
 
   @override
@@ -62,10 +97,7 @@ class FakeBridge implements SpikeBridge {
     switch (script(offset, attempt)) {
       case FakeAction.ack:
         inFlight--;
-        _controller.add(<String, dynamic>{
-          GateV2Runner.ackOffsetKey: offset,
-          GateV2Runner.ackOkKey: true,
-        });
+        _ack(offset);
         return Future<void>.value();
       case FakeAction.hang:
         // Deliberately never completes and never decrements inFlight: the
@@ -79,6 +111,31 @@ class FakeBridge implements SpikeBridge {
       case FakeAction.successNoAck:
         inFlight--;
         return Future<void>.value();
+      case FakeAction.ackWrongOffset:
+        inFlight--;
+        _ack(offset + 1);
+        return Future<void>.value();
+      case FakeAction.ackNotOk:
+        inFlight--;
+        _ack(offset, ok: false);
+        return Future<void>.value();
+      case FakeAction.ackTwice:
+        inFlight--;
+        _ack(offset);
+        _ack(offset);
+        return Future<void>.value();
+      case FakeAction.streamErrorThenAck:
+        inFlight--;
+        _controller.addError(StateError('mapper threw on non-Map event'));
+        _ack(offset);
+        return Future<void>.value();
+      case FakeAction.ackThenLateError:
+        inFlight--;
+        _ack(offset);
+        return Future<void>.delayed(
+          const Duration(milliseconds: 1),
+          () => throw SpikeSendException('[LATE_FAILURE]'),
+        );
     }
   }
 }
@@ -239,6 +296,154 @@ void main() {
         bridge.sent.every((m) => m[ProtocolKeys.keyOffset] == 0),
         isTrue,
       );
+    });
+  });
+
+  group('ack matching guards', () {
+    test('wrong-offset ack is ignored → timeout → retry → ack', () async {
+      final bridge = FakeBridge(
+        (offset, attempt) => offset == 0 && attempt == 1
+            ? FakeAction.ackWrongOffset
+            : FakeAction.ack,
+      );
+      final summary = await makeRunner(bridge).run();
+
+      expect(summary.timeoutCount, 1);
+      expect(summary.firstTryAcks, 4);
+      expect(summary.retriedThenAcked, 1);
+      expect(summary.completedChunks, 5);
+    });
+
+    test('ok:false ack is ignored → timeout → retry → ack', () async {
+      final bridge = FakeBridge(
+        (offset, attempt) => offset == 0 && attempt == 1
+            ? FakeAction.ackNotOk
+            : FakeAction.ack,
+      );
+      final summary = await makeRunner(bridge).run();
+
+      expect(summary.timeoutCount, 1);
+      expect(summary.retriedThenAcked, 1);
+      expect(summary.completedChunks, 5);
+    });
+
+    test('duplicate matching ack is discarded, not double-counted', () async {
+      final snapshots = <GateV2Progress>[];
+      final bridge = FakeBridge(
+        (offset, _) =>
+            offset == 0 ? FakeAction.ackTwice : FakeAction.ack,
+      );
+      final summary =
+          await makeRunner(bridge, onProgress: snapshots.add).run();
+
+      expect(summary.completedChunks, 5);
+      expect(summary.firstTryAcks, 5);
+      expect(snapshots.last.acked, 5);
+    });
+  });
+
+  group('stream and late-error evidence', () {
+    test('stream error event is recorded as evidence, run survives',
+        () async {
+      final bridge = FakeBridge(
+        (offset, _) => offset == 0
+            ? FakeAction.streamErrorThenAck
+            : FakeAction.ack,
+      );
+      final summary = await makeRunner(bridge).run();
+
+      expect(summary.completedChunks, 5);
+      expect(summary.aborted, isFalse);
+      expect(
+        summary.exceptionCodes.where((c) => c.startsWith('stream:')),
+        hasLength(1),
+      );
+    });
+
+    test('late send error after the attempt settled is recorded, not lost',
+        () async {
+      final bridge = FakeBridge((offset, attempt) {
+        if (offset == 0) {
+          return FakeAction.ackThenLateError;
+        }
+        // Chunk 1 hangs once so the run is still alive when the late error
+        // from chunk 0's send future fires.
+        if (offset == 3 && attempt == 1) {
+          return FakeAction.hang;
+        }
+        return FakeAction.ack;
+      });
+      final summary = await makeRunner(bridge).run();
+
+      expect(summary.completedChunks, 5);
+      expect(summary.exceptionCodes, contains('late:[LATE_FAILURE]'));
+    });
+  });
+
+  group('re-init failure paths', () {
+    test('reinit throws → prefixed code recorded → resend still recovers',
+        () async {
+      final bridge = FakeBridge(
+        (offset, attempt) => offset == 0 && attempt <= 3
+            ? FakeAction.hang
+            : FakeAction.ack,
+      )..reinitBehavior = ReinitBehavior.throwError;
+      final summary = await makeRunner(bridge).run();
+
+      expect(bridge.reinitCalls, 1);
+      expect(summary.exceptionCodes, contains('reinit:[REINIT_FAILED]'));
+      expect(summary.reinitActivations.single.recovered, isTrue);
+      expect(summary.completedChunks, 5);
+      expect(summary.aborted, isFalse);
+    });
+
+    test('reinit hangs → timeout-wrapped, recorded → resend still recovers',
+        () async {
+      final bridge = FakeBridge(
+        (offset, attempt) => offset == 0 && attempt <= 3
+            ? FakeAction.hang
+            : FakeAction.ack,
+      )..reinitBehavior = ReinitBehavior.hang;
+      final summary = await makeRunner(bridge).run();
+
+      expect(bridge.reinitCalls, 1);
+      expect(summary.exceptionCodes, contains('reinit:timeout'));
+      expect(summary.reinitActivations.single.recovered, isTrue);
+      expect(summary.completedChunks, 5);
+    });
+  });
+
+  group('per-chunk payload and timing evidence', () {
+    test('payloads vary per chunk at identical size', () async {
+      final bridge = FakeBridge((_, _) => FakeAction.ack);
+      await makeRunner(bridge).run();
+
+      final payloads = bridge.sent
+          .map((m) => m[ProtocolKeys.keyPayload]! as String)
+          .toList();
+      expect(payloads.toSet(), hasLength(5));
+      expect(payloads.map((p) => p.length).toSet(), hasLength(1));
+    });
+
+    test('attempt wall-clocks are recorded per send, not per chunk',
+        () async {
+      final bridge = FakeBridge(
+        (offset, attempt) => offset == 0 && attempt == 1
+            ? FakeAction.hang
+            : FakeAction.ack,
+      );
+      final summary = await makeRunner(bridge).run();
+
+      final retried = summary.chunkResults.first;
+      expect(retried.attempts, 2);
+      expect(retried.attemptWallClocks, hasLength(2));
+      // The first attempt rode the full timeout; the ack-confirmed second
+      // attempt did not.
+      expect(
+        retried.attemptWallClocks.first,
+        greaterThanOrEqualTo(const Duration(milliseconds: 40)),
+      );
+      expect(summary.chunkResults.last.attemptWallClocks, hasLength(1));
     });
   });
 

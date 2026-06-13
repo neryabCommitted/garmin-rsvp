@@ -4,7 +4,7 @@ baseline_commit: 7f274d88758af0986024c610e1501a7cfd7575ba
 
 # Story 1.4: Gate V2 — transfer reliability & bridge sufficiency (hardware)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -57,6 +57,24 @@ So that the delivery epic's protocol design (FR20) is validated and OQ2 is resol
   - [x] Update `docs/gates.md`: V2 table row + expand §V2 — status, method (plugin version, SDK pin, encoding runs, N, defense design), measured success rates per run, bug observed/not + defense outcome, the bridge decision with a pointer to the ADR, and the Epic 4 implication (TransferEngine inherits the validated defense pattern in ONE place — architecture §Process Patterns; ProtocolClient/ciq_bridge build on the decided transport).
   - [x] Record the verdict against the matrix (Dev Notes → Outcome → verdict matrix). If transfers are unrecoverable even at SDK level, raise the premise-rework flag for Epic 4 explicitly in gates.md.
   - [x] Update sprint-status: `1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware` → review (code-review flips it to done).
+
+### Review Findings
+
+- [x] [Review][Decision] Mid-run START press destroys watch counters and races in-flight ack listeners — it already destroyed Run B's watch ledger (~chunk 72). RESOLVED (option 1): two-press confirm reset (`requestReset` + 3 s arm window, "reset? press again" on the view) + generation-tagged ack listeners discarding stale callbacks; window logic pure-tested (`gateV2ArmWindowOpenTest`).
+- [x] [Review][Patch] `messages.listen` has no `onError` — a stream error event kills the run unhandled [companion/lib/gate_v2/gate_v2_runner.dart:291] — fixed: onError records `stream:`-prefixed code as evidence, run survives (test: "stream error event is recorded")
+- [x] [Review][Patch] `reinit()`/`initialize()` not timeout-wrapped — the defense can hang forever, exactly when the bridge is presumed wedged [companion/lib/gate_v2/gate_v2_runner.dart:353, companion/lib/gate_v2/gate_v2_screen.dart:92] — fixed: both get the sends' timeout discipline; reinit hang recorded as `reinit:timeout` (tests: re-init failure paths)
+- [x] [Review][Patch] Watch double-counts `_valid` + `_invalid` when `Communications.transmit` throws after `_valid++` in the same try [watch/source/PaceTurnerApp.mc:84-91] — fixed: `transmitAck` has its own guard counting `ackErrors` instead
+- [x] [Review][Patch] Receive catch-all collapses every exception to `"exc"`, discarding the only crash evidence the spike exists to record [watch/source/PaceTurnerApp.mc:91] — fixed: `GateV2.errLabel(e.getErrorMessage())`, truncated, pure-tested
+- [x] [Review][Patch] `base64ToByteArray` feeds `convertEncodedString` unguarded — malformed base64 raises the uncatchable SDK 8.4.0 system error [watch/source/GateV2View.mc:67] — fixed: `isPlausibleBase64` structural pre-check; malformed inputs now safely testable and tested in the CI image
+- [x] [Review][Patch] Late send-error code silently dropped from `exceptionCodes`; comment wrong for the acked-then-errored case [companion/lib/gate_v2/gate_v2_runner.dart:419-425] — fixed: recorded as `late:`-prefixed evidence (test: "late send error … is recorded")
+- [x] [Review][Patch] Re-init failure codes mixed into `exceptionCodes` indistinguishable from transfer exceptions [companion/lib/gate_v2/gate_v2_runner.dart:356] — fixed: `reinit:` prefix
+- [x] [Review][Patch] "strictly one send in flight" doc overstated — a timed-out attempt's wedged native call stays pending while the retry fires [companion/lib/gate_v2/gate_v2_runner.dart:204] — fixed: doc now says one AWAITED send and names the uncancellable pending call
+- [x] [Review][Patch] Every chunk carries identical payload bytes — cross-chunk misdelivery/reorder undetectable [companion/lib/gate_v2/gate_v2_runner.dart:279] — fixed: filler varies per chunk at identical size (test: "payloads vary per chunk")
+- [x] [Review][Patch] Wall-clock recorded per chunk across all attempts, not per send attempt (spec subtask: "wall-clock per send") [companion/lib/gate_v2/gate_v2_runner.dart:104] — fixed: `ChunkResult.attemptWallClocks` per attempt (test: "attempt wall-clocks")
+- [x] [Review][Patch] Test gaps: ack-matching guards and the reinit-throws path untested [companion/test/gate_v2/gate_v2_runner_test.dart] — fixed: wrong-offset / `ok:false` / duplicate-ack tests added; `FakeBridge.reinitBehavior` scripts throw/hang
+- [x] [Review][Patch] gates.md states the Run B `A>V` skew cause as fact [docs/gates.md:95] — fixed: hedged to "consistent with … mechanism inferred, not verified" (gates.md + this story's Completion Notes)
+- [x] [Review][Defer] No cancel path: runner has no cancel API, screen has no Stop button, N unbounded — a stuck run is only killable via app kill (which is how the aborted Run B attempt ended) [companion/lib/gate_v2/gate_v2_screen.dart:77] — deferred to Story 1.5 harness reuse
+- [x] [Review][Defer] `timeoutCount` conflates silent-hang (mode a) vs SDK-SUCCESS-without-ack signatures, and timeout chunk indices aren't recorded — the spec asks "know which one you hit / at which send index" [companion/lib/gate_v2/gate_v2_runner.dart:428-432] — deferred to Story 1.5 evidence sharpening
 
 ## Dev Notes
 
@@ -175,7 +193,7 @@ claude-fable-5 (Fable 5)
 - Task 2 ✅: V1 spike fully retired (files deleted, app stripped; git preserves). Manifest: `Fit` out, `Communications` in; minApiLevel untouched at 5.2.0. Receive callback broad-catch guarded, bounded counters only, ack as Dictionary via `Communications.transmit` with listener counting acked/ackErrors.
 - Task 3 ✅ (executed by Nerya, 2026-06-11; wireless, real Fenix 8 47 mm ↔ Samsung SM-S938B / Android 16, GCM paired; watch sideloaded via MTP, normal build):
   - **Run A (base64 String, N=200): 200/200 first-try acks.** 0 timeouts, 0 exceptions, 0 re-inits. 178 490 ms total → ~892 ms/chunk, ~1.0 KB/s payload. Watch final: R:200 V:200 A:200.
-  - **Run B (List<int>, N=200): 200/200 first-try acks.** 0 timeouts, 0 exceptions, 0 re-inits. 293 074 ms total → ~1465 ms/chunk, ~0.6 KB/s payload — element-wise serialization costs ~64% more wall-clock than base64's 33% inflation. Watch live counters zeroed by a mid-run START press (~chunk 72): display `R:128 V:128 A:129` covers the post-reset window (`A` leads `V` by one in-flight ack callback straddling the reset); phone-side ack accounting spans the full run and is the authoritative AC1 measure.
+  - **Run B (List<int>, N=200): 200/200 first-try acks.** 0 timeouts, 0 exceptions, 0 re-inits. 293 074 ms total → ~1465 ms/chunk, ~0.6 KB/s payload — element-wise serialization costs ~64% more wall-clock than base64's 33% inflation. Watch live counters zeroed by a mid-run START press (~chunk 72): display `R:128 V:128 A:129` covers the post-reset window (`A` leading `V` is consistent with one in-flight ack callback straddling the reset — mechanism inferred, not verified); phone-side ack accounting spans the full run and is the authoritative AC1 measure.
   - First-send bug (mode a) NOT observed in 400 consecutive wireless sends; defense never activated (re-init arm hardware-unproven — noted in ADR). No TOO_LARGE/-102 at ~1 KB. Watch→phone ack channel lossless both runs.
   - Run artifact: one aborted Run B attempt was an Android 16 app-freeze of the backgrounded debug companion (Dart timers fully stopped — even the 10 s timeouts can't fire), then the system killed the process ("Lost connection to device"). Not a transfer failure; recorded in gates.md/ADR as direct evidence for Epic 4's foreground-service requirement.
 - Task 4 ✅: OQ2 resolved = **keep stock `watch_connectivity_garmin`, base64-String transport** — `docs/decisions/0002-oq2-companion-bridge.md` (0001 format; criteria-by-criteria; fork/custom-bridge as documented escape hatches). `docs/gates.md` V2 row + §V2 expanded (method, both runs' measurements, verdict matrix with observed row bold, Epic 4 implication). Verdict matrix row 1: **V2 passed**; premise-rework flag not raised. Sprint-status → review.
@@ -204,3 +222,4 @@ claude-fable-5 (Fable 5)
 
 - 2026-06-11: Tasks 1–2 implemented TDD (companion 60/60, watch CI-image 15/15, analyze + Strict `-l 3` clean on all targets). Hardware run (Task 3) handed to Nerya.
 - 2026-06-11: Task 3 hardware runs completed by Nerya (Run A 200/200 @ ~892 ms/chunk; Run B 200/200 @ ~1465 ms/chunk; bug not observed). Task 4: ADR 0002 (keep stock bridge, base64 transport), gates.md V2 **passed**, story → review.
+- 2026-06-11: Code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor): 13 patches applied (runner stream/timeout/evidence hardening, watch two-press reset + generation token, base64 plausibility guard, double-count fix, per-attempt timing, per-chunk payloads, test-gap closure, evidence hedges), 2 deferred to Story 1.5 (deferred-work.md), 5 dismissed. Verified: `flutter analyze` clean, `flutter test` 69/69, Strict `-l 3` × 3 targets clean, CI image 19/19. Story → done.

@@ -89,7 +89,10 @@ class _GateV2ScreenState extends State<GateV2Screen> {
       // Bridge built per run, only here — never during widget construction,
       // so the screen stays pumpable without platform channels.
       final bridge = GarminSpikeBridge();
-      await bridge.initialize();
+      // initialize() is a platform call into the same SDK that can wedge —
+      // it gets the same timeout discipline as sends; a hang surfaces as a
+      // fatal error instead of freezing the screen in "Running…" forever.
+      await bridge.initialize().timeout(const Duration(seconds: 10));
       final summary = await GateV2Runner(
         bridge: bridge,
         encoding: _encoding,

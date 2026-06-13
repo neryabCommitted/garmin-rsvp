@@ -92,6 +92,7 @@ final class ChunkResult {
     required this.outcome,
     required this.attempts,
     required this.wallClock,
+    required this.attemptWallClocks,
   });
 
   final int index;
@@ -99,9 +100,14 @@ final class ChunkResult {
   final ChunkOutcome outcome;
   final int attempts;
 
-  /// Wall-clock across all of this chunk's attempts — the per-send timing
-  /// evidence (throughput baseline expectation: 1–2 s round trips).
+  /// Wall-clock across all of this chunk's attempts (excludes any re-init
+  /// time between attempts).
   final Duration wallClock;
+
+  /// Per-send-attempt wall-clock, in attempt order — the "wall-clock per
+  /// send" evidence (throughput baseline expectation: 1–2 s round trips). A
+  /// retried chunk's individual attempts stay distinguishable here.
+  final List<Duration> attemptWallClocks;
 }
 
 /// Live counters for the harness UI, emitted after every attempt.
@@ -201,8 +207,10 @@ final class GateV2Summary {
 }
 
 /// Drives one spike run: N sequential `chunkData` envelopes, offset-addressed
-/// (`off += n`, fixed fingerprint), strictly one send in flight (the plugin
-/// does not queue — concurrent sends run on parallel native threads), every
+/// (`off += n`, fixed fingerprint), one AWAITED send in flight (the plugin
+/// does not queue — concurrent sends run on parallel native threads; a
+/// timed-out attempt's wedged native call cannot be cancelled from Dart and
+/// may still be pending when the retry fires), every
 /// send timeout-wrapped (the Dart future can hang forever on the known bug),
 /// retry-same-chunk on failure (idempotent per FR20), and after
 /// [failuresBeforeReinit] consecutive failures the V2 defense: bridge
@@ -276,8 +284,10 @@ final class GateV2Runner {
     }
     _ran = true;
 
-    final payload = encodeChunk(_fillerRecords());
-    final transport = _transcode(payload);
+    // Filler is size-stable but varies per chunk, so cross-chunk
+    // misdelivery, duplication, or reordering cannot decode silently as the
+    // right chunk's bytes.
+    final payloadBytesPerChunk = encodeChunk(_fillerRecords(0)).length;
 
     final timeoutCountBox = _Counter();
     final exceptionCodes = <String>[];
@@ -288,7 +298,17 @@ final class GateV2Runner {
     var failedAfterDefense = 0;
     var aborted = false;
 
-    final subscription = bridge.messages.listen(_onMessage);
+    // onError: the plugin's stream mapper can throw on unexpected inbound
+    // events (`Map.from` on a non-Map) — an error event must become
+    // evidence, not an unhandled async error that kills the run.
+    final subscription = bridge.messages.listen(
+      _onMessage,
+      onError: (Object e) {
+        exceptionCodes.add('stream:${_codeOf(e)}');
+        _lastError = 'stream:${_codeOf(e)}';
+        _emitProgress();
+      },
+    );
     final totalWatch = Stopwatch()..start();
     try {
       for (var i = 0; i < totalChunks && !aborted; i++) {
@@ -298,6 +318,8 @@ final class GateV2Runner {
         // encoding. The SPEC §5 bytes underneath are unchanged — the watch
         // reconstructs and StreamDecoder-decodes them, proving end-to-end
         // integrity.
+        final payload = encodeChunk(_fillerRecords(i));
+        final transport = _transcode(payload);
         final msg = Map<String, Object?>.of(
           chunkDataEnvelope(
             fingerprint: fingerprint,
@@ -308,6 +330,7 @@ final class GateV2Runner {
         )..[ProtocolKeys.keyPayload] = transport;
 
         final chunkWatch = Stopwatch()..start();
+        final attemptWallClocks = <Duration>[];
         var attempts = 0;
         var consecutiveFailures = 0;
         var reinitDone = false;
@@ -318,12 +341,15 @@ final class GateV2Runner {
             _retries++;
           }
           _sent++;
+          final attemptWatch = Stopwatch()..start();
           final failed = !await _attemptAcked(
             msg,
             offset,
             timeoutCountBox,
             exceptionCodes,
           );
+          attemptWatch.stop();
+          attemptWallClocks.add(attemptWatch.elapsed);
           _emitProgress();
           if (!failed) {
             _acked++;
@@ -349,12 +375,19 @@ final class GateV2Runner {
           }
           if (consecutiveFailures >= failuresBeforeReinit) {
             _defenseActivations++;
+            // The re-init talks to the same possibly-wedged plugin as the
+            // sends — it gets the same timeout discipline, and its failure
+            // codes are prefixed so the evidence keeps re-init failures
+            // distinguishable from transfer exceptions.
             try {
-              await bridge.reinit();
+              await bridge.reinit().timeout(sendTimeout);
+            } on TimeoutException {
+              exceptionCodes.add('reinit:timeout');
+              _lastError = 'reinit:timeout';
             } catch (e) {
               // A failing re-init is itself evidence; the resend still runs.
-              exceptionCodes.add(_codeOf(e));
-              _lastError = _codeOf(e);
+              exceptionCodes.add('reinit:${_codeOf(e)}');
+              _lastError = 'reinit:${_codeOf(e)}';
             }
             reinitDone = true;
             _emitProgress();
@@ -375,6 +408,7 @@ final class GateV2Runner {
           outcome: outcome,
           attempts: attempts,
           wallClock: chunkWatch.elapsed,
+          attemptWallClocks: List<Duration>.unmodifiable(attemptWallClocks),
         ));
       }
     } finally {
@@ -387,7 +421,7 @@ final class GateV2Runner {
       requestedChunks: totalChunks,
       completedChunks: firstTryAcks + retriedThenAcked,
       recordsPerChunk: recordsPerChunk,
-      payloadBytesPerChunk: payload.length,
+      payloadBytesPerChunk: payloadBytesPerChunk,
       firstTryAcks: firstTryAcks,
       retriedThenAcked: retriedThenAcked,
       failedAfterDefense: failedAfterDefense,
@@ -419,9 +453,12 @@ final class GateV2Runner {
       onError: (Object e) {
         if (!ack.isCompleted) {
           ack.completeError(e);
+        } else {
+          // The attempt already settled (acked or timed out) — the late code
+          // no longer drives retry accounting, but it is still evidence and
+          // is recorded, prefixed to stay distinguishable.
+          exceptionCodes.add('late:${_codeOf(e)}');
         }
-        // A late error after the attempt settled is dropped: its attempt was
-        // already accounted as a timeout.
       },
     );
     try {
@@ -465,12 +502,15 @@ final class GateV2Runner {
 
   /// ~9 bytes per record (5-byte header + 4-char ASCII word): the default
   /// 100 records ≈ 900 B, under the conservative ≤1 KB cap (the size sweep
-  /// is gate V3 / Story 1.5, not here — AR29).
-  List<WordRecord> _fillerRecords() {
+  /// is gate V3 / Story 1.5, not here — AR29). Words derive from the global
+  /// record ordinal so consecutive chunks carry different bytes at an
+  /// identical size.
+  List<WordRecord> _fillerRecords(int chunkIndex) {
+    final base = chunkIndex * recordsPerChunk;
     return List<WordRecord>.generate(
       recordsPerChunk,
       (i) => WordRecord(
-        word: 'w${(i + 1).toString().padLeft(3, '0')}',
+        word: 'w${((base + i) % 999 + 1).toString().padLeft(3, '0')}',
         flags: 0,
         orpPivot: 1,
         bonusMs: 0,
