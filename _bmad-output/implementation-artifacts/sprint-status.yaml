@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-13
+last_updated: 2026-06-13  # story 1.5 → done: code review passed (1 witness-guard patch applied, CI 24/24)
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -48,7 +48,7 @@ development_status:
   1-2-protocol-spec-md-and-mirrored-constants: done
   1-3-gate-v1-hands-off-screen-on-feasibility-hardware: done
   1-4-gate-v2-transfer-reliability-bridge-sufficiency-hardware: done
-  1-5-gate-v3-chunk-size-calibration-hardware: review
+  1-5-gate-v3-chunk-size-calibration-hardware: done
   epic-1-retrospective: optional
 
   # ── Epic 2: Phone Library & Book Conversion ──

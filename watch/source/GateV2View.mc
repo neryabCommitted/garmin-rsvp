@@ -188,6 +188,13 @@ module GateV2 {
         if (p instanceof Lang.String) {
             var s = p as String;
             binLen = base64BinaryLen(s);
+            // A base64 chunk payload is always a whole number of 4-char units;
+            // binLen == 0 means a malformed length (not multiple of 4, or < 4).
+            // Reject rather than ack with a 0 witness that under-reports rcv:.
+            if (binLen == 0) {
+                r.err = ERR_BAD_PAYLOAD;
+                return r;
+            }
             // Bounded O(1) integrity touch: the head must decode and its first
             // SPEC §5 record header must be sane. Proves real chunk bytes
             // arrived, not a blob that merely deserialized as a string.

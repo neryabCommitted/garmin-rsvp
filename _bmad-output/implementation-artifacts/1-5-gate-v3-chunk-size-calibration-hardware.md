@@ -4,7 +4,7 @@ baseline_commit: b252047
 
 # Story 1.5: Gate V3 — chunk-size calibration (hardware)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -223,3 +223,9 @@ Then transcribe the summary + watch witness into `docs/gates.md` §V3 (fill the 
 - `_bmad-output/implementation-artifacts/deferred-work.md` — the two Story-1.4 items marked RESOLVED
 - `_bmad-output/implementation-artifacts/1-5-gate-v3-chunk-size-calibration-hardware.md` — this story (tasks, Dev Agent Record)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — `1-5 → review`
+
+### Review Findings
+
+_Code review 2026-06-13 (3-layer adversarial: Blind Hunter, Edge Case Hunter, Acceptance Auditor). Diff `b252047..be554a5`. AC1 & AC2 confirmed satisfied; recorded result (last-good 12096 B / α first-fail 12288 B / safe 11584 B) verified consistent across code, `docs/gates.md`, and `deferred-work.md`. All other findings are robustness nits on degenerate/never-produced inputs or by-design lighten-receive tradeoffs on disposable spike files — dismissed (see review summary). One optional witness-hardening patch below._
+
+- [x] [Review][Patch] `receiveLight` acks a String payload with invalid base64 length instead of rejecting it [watch/source/GateV2View.mc:187-205] — FIXED 2026-06-13: added `binLen == 0 → ERR_BAD_PAYLOAD` guard; CI image (SDK 8.4.0, `fenix847mm`) 24/24 PASS. — `base64BinaryLen` returns 0 when `len % 4 != 0` (or `< 4`), but `receiveLight` only checks `headDecodes` afterward; a malformed-length string whose 64-char prefix decodes cleanly is acked with `r.ok=true, bytesLen=0`, silently under-reporting the `_maxReceived` witness. The sweep sender always emits padded multiple-of-4 base64 so this never fired in the recorded run; guard is defense-in-depth (`if (binLen == 0) { r.err = ERR_BAD_PAYLOAD; return r; }`) only meaningful if the spike is re-run against a corrupting transport. Low severity; does not affect the recorded result.
