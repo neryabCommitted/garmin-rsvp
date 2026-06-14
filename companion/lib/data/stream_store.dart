@@ -58,7 +58,18 @@ class StreamStore {
     final streamFile = File('$stem$_streamExt');
     final jsonlFile = File('$stem$_jsonlExt');
     await streamFile.writeAsBytes(streamBytes, flush: true);
-    await jsonlFile.writeAsString(debugJsonl.join('\n'), flush: true);
+    try {
+      await jsonlFile.writeAsString(debugJsonl.join('\n'), flush: true);
+    } catch (_) {
+      // Atomicity (AC7): the `.stream` landed but its sibling `.jsonl` did not.
+      // Delete the orphan so no half-written pair survives — import_service's
+      // rollback only fires once `write` returns a StoredStream, which it won't
+      // here — then rethrow for the caller to map to a typed failure.
+      if (await streamFile.exists()) {
+        await streamFile.delete();
+      }
+      rethrow;
+    }
     return StoredStream(
       streamPath: streamFile.path,
       jsonlPath: jsonlFile.path,

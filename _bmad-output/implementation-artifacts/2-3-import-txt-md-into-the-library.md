@@ -4,7 +4,7 @@ baseline_commit: 4212cae0eb7eb26742ffd882b42747f5111b20d5
 
 # Story 2.3: Import .txt/.md into the library
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -107,6 +107,20 @@ This is the **first integration + UI story of Epic 2** and of the companion app.
   - [x] `flutter analyze` — clean under strict-casts / strict-inference / strict-raw-types. (Generated `*.g.dart` is exempt from hand-edits but must analyze clean.)
   - [x] Grep-confirm AR19 purity preserved on the leaf modules: no new `package:flutter/*` under the **pure** files (`html_extractor.dart`, and `runPipeline`'s pure chain). `import_service.dart` itself MAY import Flutter/async (it's the shell) — that's correct.
   - [x] Confirm layering (architecture.md:452): `ui/ → services/ → data/`. `ui/` must not import `drift`/`stream_store` directly — it goes through providers/`import_service`.
+
+### Review Findings
+
+_Code review 2026-06-15 (Amelia) — commit `9128add` vs `4212cae`. 3 adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). 6/7 ACs cleanly satisfied; AC6 PARTIAL (share-sheet runtime unverified)._
+
+- [x] [Review][Patch] Partial stream write leaks an orphan `.stream` (AC7 no-partial-state hole) [companion/lib/data/stream_store.dart:60-66] — `write()` wrote `.stream` then `.jsonl`; if the `.jsonl` write threw, `write()` never returned, `stored` stayed null, and `_rollback(null)` deleted nothing → orphan `<fingerprint>.stream` with no Books row. **Fixed:** `write()` is now atomic — on a `.jsonl` failure it deletes the already-written `.stream` before rethrowing. Regression test added (`test/data/stream_store_test.dart` — "write leaves no orphan .stream when the .jsonl write fails (AC7)").
+- [x] [Review][Patch] Share-sheet `reset()` ordering [companion/lib/ui/library/library_screen.dart:45-52] — `initState` called `source.reset()` immediately after an un-awaited `_handleShared(files)`, leaving reset-vs-import ordering undefined. **Fixed:** the `.then` callback is now `async` and awaits `_handleShared` before `reset()`.
+- [x] [Review][Defer] Share-sheet silent-drop — a delivery arriving while an import is in-flight (warm `mediaStream` event, or second `SEND` batch) is silently dropped by `if (_importing) return;` with no SnackBar [companion/lib/ui/library/library_screen.dart:104] — deferred; needs a queue/notify UX decision, belongs with the manual on-device share-sheet pass; runtime unverified.
+- [x] [Review][Defer] Share-sheet markdown-as-text — md shared as `text/plain` is mis-typed (`isMd = mimeType.contains('markdown')`) so paragraph structure is lost [companion/lib/ui/library/library_screen.dart:81-83] — deferred; only half-fixable blind (raw-text shares carry no extension), share path unverified.
+- [x] [Review][Defer] Failure-taxonomy mislabel — a single token >255 UTF-8 bytes (long URL, base64 blob, ~86-char CJK run) makes `bake`/`encodeChunk` throw `ArgumentError`, which `import_service.dart:143` maps to `emptyContent` → a non-empty file reports "is empty" — deferred to 2.6; 2.6 owns the full failure taxonomy + UI messaging, splitting the `ArgumentError` mapping now is a half-measure 2.6 would redo.
+- [x] [Review][Defer] `StreamStore.delete()` reconstructs the `.jsonl` sibling by string surgery [companion/lib/data/stream_store.dart:70-82] — deferred; latent, only reachable once 2.5 Remove passes a `streamPath` lacking the `.stream` suffix.
+- [x] [Review][Defer] No content dedup — re-importing the same file (salt differs per run) creates a second library entry + stream [companion/lib/services/import/import_service.dart] — deferred; not an AC, future work.
+
+_Dismissed as noise (4): `ref.read` in `initState` (Riverpod 3 permits it; single persistent screen; subscription cancelled in `dispose`); dead enum members `unreadable`/`unsupported` + `allowMalformed`-never-throws (by-design seed taxonomy, 2.6 widens); `_basename` blank-title / dead `segments.isEmpty` guard (unreachable — picker/share always supply a real filename); `LinearProgressIndicator` inside `ListTile.subtitle` (cosmetic, widget test green)._
 
 ## Dev Notes
 

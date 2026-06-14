@@ -80,6 +80,28 @@ void main() {
     final absent = '${tempDir.path}/streams/nope.stream';
     await expectLater(store.delete(absent), completes);
   });
+
+  test('write leaves no orphan .stream when the .jsonl write fails (AC7)',
+      () async {
+    // Force the .jsonl write to throw by parking a directory where the sibling
+    // file must land — writeAsString onto a directory path fails.
+    final streamsDir =
+        Directory('${tempDir.path}${Platform.pathSeparator}streams');
+    await streamsDir.create(recursive: true);
+    final jsonlAsDir = Directory(
+        '${streamsDir.path}${Platform.pathSeparator}abc12345.jsonl');
+    await jsonlAsDir.create();
+    final orphan =
+        File('${streamsDir.path}${Platform.pathSeparator}abc12345.stream');
+
+    await expectLater(
+      store.write(streamBytes: bytes, debugJsonl: jsonl, fingerprint: 'abc12345'),
+      throwsA(isA<FileSystemException>()),
+    );
+
+    // The half-written .stream must be cleaned up — no orphan pair survives.
+    expect(await orphan.exists(), isFalse);
+  });
 }
 
 bool isAbsolutePath(String path) =>

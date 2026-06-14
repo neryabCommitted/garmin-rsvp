@@ -42,10 +42,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     // unless the real plugin is injected by main.dart.
     final source = ref.read(shareSourceProvider);
     _shareSub = source.mediaStream().listen(_handleShared);
-    source.initialMedia().then((files) {
+    source.initialMedia().then((files) async {
       if (files.isNotEmpty) {
-        _handleShared(files);
+        await _handleShared(files);
       }
+      // Reset only after the cold-start payload is fully consumed — clearing the
+      // intent before the import completes leaves reset-vs-import ordering undefined.
       source.reset();
     });
   }
