@@ -4,7 +4,7 @@ baseline_commit: 9697a7f7750654cd3abd834bbd3726859b14266d
 
 # Story 2.2: Word-stream baking (pacing, ORP, fingerprint, encode)
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -71,6 +71,16 @@ This is the **final pure-Dart stage** of the Epic 2 import pipeline (`sanitize �
   - [x] `cd companion && flutter test` — all pass (136 baseline + 47 new = 183; no regression).
   - [x] `flutter analyze` — clean (strict-casts / strict-inference / strict-raw-types).
   - [x] Grep-confirm: no `import 'package:flutter` under `lib/services/import/`.
+
+### Review Findings
+
+_Code review 2026-06-14 (Amelia, bmad-code-review): 3 adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). All 6 ACs satisfied; AR8/AR19/AR20 honoured; no BLOCKER/HIGH. 1 patch, 4 deferred, 9 dismissed as noise._
+
+- [x] [Review][Patch] Complexity 85% cap never exercised by a test; misleading "complexity capped at 64%" comment [companion/test/services/import/pacing_test.dart:60] — DONE: replaced the loose `<=510` assertion with an exact cap-engaging case (`AREA-51-XYZ` → 206 ms; uncapped would be 236, so the exact value proves `_complexityCapPct` engages) and corrected the `mother-in-law` comment (64% is below the 85% cap, not "capped"). flutter test 183 pass, analyze clean.
+- [x] [Review][Defer] Pacing tuning fidelity — complexity tier counts ASCII hyphen only while punctuation tier honours em/en dash; `y` always counted as a vowel inflates syllable groups [companion/lib/services/import/pacing.dart:63,117] — deferred to Gate V4 recalibration (addendum flags Nano percentages for Fenix 8 retune).
+- [x] [Review][Defer] `!`/`?` have no punctuation-tier branch; masked today because the tokenizer always flags them `sentenceEnd` (→150%) [companion/lib/services/import/pacing.dart:141] — deferred; add an explicit branch if `bonusMsForWord` is ever driven from a non-tokenizer source.
+- [x] [Review][Defer] ORP word-char-free token degrades to byte 0 rather than a typed failure [companion/lib/services/import/orp.dart:62] — deferred to Story 2.4: decide whether the extractor may emit punctuation-only tokens, then guard or accept explicitly. (Not reachable from the 2.1 tokenizer; for a standalone-punctuation token byte 0 is in fact the correct pivot.)
+- [x] [Review][Defer] Fingerprint test hardening — no assertion that large salts differing only in high bytes (or negative salts) yield different fingerprints [companion/test/services/import/fingerprint_test.dart] — deferred; add high-bit / negative-salt sensitivity tests. (Salt fold is correct on the 64-bit mobile VM; no web target exists.)
 
 ## Dev Notes
 

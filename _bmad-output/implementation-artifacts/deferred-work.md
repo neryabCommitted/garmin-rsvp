@@ -1,5 +1,12 @@
 # Deferred Work
 
+## Deferred from: code review of 2-2-word-stream-baking-pacing-orp-fingerprint-encode (2026-06-14)
+
+- Pacing tuning fidelity (`companion/lib/services/import/pacing.dart`): the complexity tier's compound-joiner test uses `word.contains('-')` (ASCII hyphen only) while the punctuation tier's `_dashChars` honours em/en dash — so an en-dashed compound gets the dash *punctuation* bonus but not the compound *complexity* bonus; and `_vowelGroup` always counts `y` as a vowel, inflating syllable groups for consonantal-`y` words (`syzygy`). Both are Nano-port fidelity nuances flagged by the addendum for Gate V4 Fenix-8 recalibration — resolve when the pacing model is retuned, not before.
+- `!`/`?` have no branch in `_punctuationPct` (`pacing.dart:141`). Harmless in the real pipeline because the 2.1 tokenizer always flags `!`/`?` as `sentenceEnd` (→ the dominant 150% pause). Add an explicit `!`/`?` branch only if `bonusMsForWord` is ever driven from a non-tokenizer token source.
+- ORP word-char-free token (`orp.dart:62`): `orpPivot` degrades to byte 0 for a token with zero letters/digits rather than raising a typed failure. Not reachable from the 2.1 tokenizer (it drops pure-punctuation tokens), and for a standalone-punctuation token byte 0 is the correct pivot anyway. Resolve the contract in Story 2.4 (may the EPUB extractor emit punctuation-only tokens?) — then either guard in `bake()` or document the accept.
+- Fingerprint test hardening (`test/services/import/fingerprint_test.dart`): existing tests prove the `^[0-9a-f]{8}$` shape and large-salt-no-crash, but none asserts that two large salts differing only in their high bytes (or a negative salt) yield different fingerprints. The 8-byte LE fold is correct on the 64-bit mobile VM (no web target exists), so this is a coverage gap, not a defect — add high-bit / negative-salt sensitivity assertions.
+
 ## Deferred from: code review of 1-2-protocol-spec-md-and-mirrored-constants (2026-06-10)
 
 - `chunkData` payload check in `decodeEnvelope` is `Uint8List`-exact (`companion/lib/protocol/envelope_codec.dart:280-286`) — rejects byte-valued `List<int>`, the shape platform channels commonly deliver. Decide accept-and-convert vs document-the-edge when wiring `companion/lib/data/ciq_bridge.dart` in Epic 4. The watch side imposes no equivalent constraint.

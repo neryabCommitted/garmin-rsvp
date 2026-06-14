@@ -52,19 +52,18 @@ void main() {
 
     test('compound joiner (hyphen) adds 14%', () {
       // "mother-in-law": 11 word-chars → length 33% (66 ms); vowel groups
-      // o,e,i,a = 4 → capped syllable 50%; compound +14% → complexity capped at
-      // 64% (128 ms). 66 + 128 = 194 ms.
+      // o,e,i,a = 4 → capped syllable 50%; compound +14% → complexity 64%
+      // (128 ms) — below the 85% cap, so nothing is capped here. 66 + 128 = 194.
       expect(bonusMsForWord(_t('mother-in-law')), 194);
     });
 
-    test('complexity tier is capped at 85%', () {
-      // A long all-caps alphanumeric hyphenated word would exceed 85% raw;
-      // assert the complexity contribution never pushes the total past
-      // length-cap(340) + complexity-cap(170) + punct(0) = 510.
-      expect(
-        bonusMsForWord(_t('SUPER-LONG-CODE-NAME-42X' * 2)),
-        lessThanOrEqualTo(510),
-      );
+    test('complexity tier is capped at 85% (cap actually engages)', () {
+      // "AREA-51-XYZ": 9 word-chars → length 18% (36 ms). Complexity stacks all
+      // four sub-bonuses: syllable groups a/ea/y = 3 → 50% (capped); mixed
+      // alphanumeric +22%; ALL-CAPS +14%; compound +14% = 100% raw → CAPPED to
+      // 85% (170 ms), not 100% (200 ms). 36 + 170 = 206. The exact 206 (vs the
+      // uncapped 236) proves _complexityCapPct engages — a `<=` bound would not.
+      expect(bonusMsForWord(_t('AREA-51-XYZ')), 206);
     });
   });
 
