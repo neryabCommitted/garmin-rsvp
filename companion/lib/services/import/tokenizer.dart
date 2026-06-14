@@ -63,11 +63,14 @@ final RegExp _letterOrDigit = RegExp(r'[\p{L}\p{N}]', unicode: true);
 /// and curly quotes plus `)`/`]`.
 const Set<String> _closers = <String>{'"', "'", '”', '’', ')', ']'};
 
-/// Dotted initialism such as `U.S.`, `e.g.`, `i.e.` — single letters joined by
-/// periods. (`Ph.D.`-style multi-letter segments are covered via
-/// [abbreviations] instead, since the SPEC regex matches single letters only.)
+/// Dotted initialism such as `U.S.`, `e.g.`, `i.e.` — two-or-more single
+/// letters joined by periods. Requires at least two letters so a lone
+/// `a.`/`b.` (a real one-letter word ending a sentence) is NOT suppressed;
+/// the single capital initial `J.` is handled by [_singleInitial] instead.
+/// (`Ph.D.`-style multi-letter segments are covered via [abbreviations], since
+/// this regex matches single-letter segments only.)
 final RegExp _dottedInitialism =
-    RegExp(r'^(\p{L}\.)+\p{L}?\.?$', unicode: true);
+    RegExp(r'^\p{L}\.(\p{L}\.?)+$', unicode: true);
 
 /// A single capital initial like `J.` (as in `J. Smith`).
 final RegExp _singleInitial = RegExp(r'^\p{Lu}\.$', unicode: true);
@@ -95,6 +98,17 @@ const Set<String> abbreviations = <String>{
 /// Splits [sanitized] text into flagged [Token]s (AC3, AC4).
 ///
 /// NFR8: returns `[]` for empty/whitespace-only input and never throws.
+///
+/// Terminal-boundary guarantee: the last token of the text is always flagged
+/// `sentenceEnd=true`, even when it lacks terminal punctuation or ends with an
+/// abbreviation/initialism. This is the bake-time equivalent of rsvpnano's
+/// read-time `currentWordEndsSentence() || atEnd()` (App.cpp:1883-1894): our
+/// flags are consumed verbatim by the watch (FR17), so the `atEnd()` guard must
+/// live in the data. Without it FR8 (two-stage pause coasts to the next
+/// `sentenceEnd`) and FR10 (rewind lands on a `sentenceEnd`) would have no final
+/// boundary. NB: this is end-of-*text* only — paragraph ends are not forced, and
+/// the Epic 3 reader must still OR its pause check with a real `atEnd()` because
+/// the end of a buffered chunk is not the end of the book.
 List<Token> tokenize(String sanitized) {
   final List<Token> tokens = <Token>[];
   for (final String paragraph in sanitized.split(_paragraphBreak)) {
@@ -110,6 +124,15 @@ List<Token> tokenize(String sanitized) {
       ));
       atParagraphStart = false;
     }
+  }
+  // Terminal-boundary guarantee: force the final token to a sentence end.
+  if (tokens.isNotEmpty && !tokens.last.sentenceEnd) {
+    final Token last = tokens.last;
+    tokens[tokens.length - 1] = Token(
+      text: last.text,
+      paragraphStart: last.paragraphStart,
+      sentenceEnd: true,
+    );
   }
   return tokens;
 }

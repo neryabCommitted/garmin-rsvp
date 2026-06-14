@@ -48,6 +48,24 @@ void main() {
     });
   });
 
+  group('sanitize — normalize line endings (AC1)', () {
+    test('CRLF becomes LF', () {
+      expect(sanitize('a\r\nb'), equals('a\nb'));
+    });
+
+    test('bare CR becomes LF', () {
+      expect(sanitize('a\rb'), equals('a\nb'));
+    });
+
+    test('CR-pair blank line becomes an LF paragraph boundary', () {
+      expect(sanitize('one\r\rtwo'), equals('one\n\ntwo'));
+    });
+
+    test('LF passes through unchanged', () {
+      expect(sanitize('a\n\nb'), equals('a\n\nb'));
+    });
+  });
+
   group('sanitize — ASCII-fold off by default (AC2)', () {
     test('curly quotes, dashes, ellipsis, accents pass through when off', () {
       const fancy = '“quote” ‘x’ em—dash en–dash '

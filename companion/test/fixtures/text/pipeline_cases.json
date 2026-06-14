@@ -1,5 +1,5 @@
 {
-  "_doc": "Story 2.1 corpus: each case runs sanitize(input, asciiFold) then tokenize() and asserts the full token list (text + flags). Inputs use \\u escapes for invisible/special codepoints so they are explicit. Covers Dev Notes -> Fixture corpus.",
+  "_doc": "Story 2.1 corpus: each case runs sanitize(input, asciiFold) then tokenize() and asserts the full token list (text + flags). Inputs embed RAW literal codepoints (soft-hyphen U+00AD, zero-width chars, NBSP/narrow-NBSP, curly quotes, em/en dash, ellipsis) — not \\u escapes — so edit invisibles with care (use a hex-aware editor). Note: tokenize() forces the LAST token of each input to sentenceEnd=true (terminal-boundary guarantee). Covers Dev Notes -> Fixture corpus.",
   "cases": [
     {
       "name": "soft-hyphen inside a word collapses to one clean token",
@@ -7,7 +7,7 @@
       "asciiFold": false,
       "expected": [
         { "text": "subword", "paragraphStart": true, "sentenceEnd": false },
-        { "text": "here", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "here", "paragraphStart": false, "sentenceEnd": true }
       ]
     },
     {
@@ -15,7 +15,7 @@
       "input": "word‌boundary",
       "asciiFold": false,
       "expected": [
-        { "text": "wordboundary", "paragraphStart": true, "sentenceEnd": false }
+        { "text": "wordboundary", "paragraphStart": true, "sentenceEnd": true }
       ]
     },
     {
@@ -25,7 +25,7 @@
       "expected": [
         { "text": "alpha", "paragraphStart": true, "sentenceEnd": false },
         { "text": "beta", "paragraphStart": false, "sentenceEnd": false },
-        { "text": "gamma", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "gamma", "paragraphStart": false, "sentenceEnd": true }
       ]
     },
     {
@@ -33,7 +33,7 @@
       "input": "café",
       "asciiFold": false,
       "expected": [
-        { "text": "café", "paragraphStart": true, "sentenceEnd": false }
+        { "text": "café", "paragraphStart": true, "sentenceEnd": true }
       ]
     },
     {
@@ -41,7 +41,7 @@
       "input": "café",
       "asciiFold": false,
       "expected": [
-        { "text": "café", "paragraphStart": true, "sentenceEnd": false }
+        { "text": "café", "paragraphStart": true, "sentenceEnd": true }
       ]
     },
     {
@@ -93,12 +93,12 @@
       ]
     },
     {
-      "name": "trailing ellipsis with an unpunctuated tail",
+      "name": "unpunctuated tail at end of text is forced to a sentence end (terminal-boundary guarantee)",
       "input": "Wait... what",
       "asciiFold": false,
       "expected": [
         { "text": "Wait...", "paragraphStart": true, "sentenceEnd": true },
-        { "text": "what", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "what", "paragraphStart": false, "sentenceEnd": true }
       ]
     },
     {
@@ -108,7 +108,7 @@
       "expected": [
         { "text": "Hold", "paragraphStart": true, "sentenceEnd": false },
         { "text": "on…", "paragraphStart": false, "sentenceEnd": true },
-        { "text": "really", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "really", "paragraphStart": false, "sentenceEnd": true }
       ]
     },
     {
@@ -143,7 +143,7 @@
       "expected": [
         { "text": "café", "paragraphStart": true, "sentenceEnd": false },
         { "text": "“hi”", "paragraphStart": false, "sentenceEnd": false },
-        { "text": "em—dash", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "em—dash", "paragraphStart": false, "sentenceEnd": true }
       ]
     },
     {
@@ -153,7 +153,40 @@
       "expected": [
         { "text": "cafe", "paragraphStart": true, "sentenceEnd": false },
         { "text": "\"hi\"", "paragraphStart": false, "sentenceEnd": false },
-        { "text": "em-dash", "paragraphStart": false, "sentenceEnd": false }
+        { "text": "em-dash", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "mid-text unpunctuated word (end of a paragraph, not end of text) is NOT a sentence end",
+      "input": "Wait... what\n\nthen done.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Wait...", "paragraphStart": true, "sentenceEnd": true },
+        { "text": "what", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "then", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "done.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "single lowercase letter + period ends a sentence (not a dotted initialism)",
+      "input": "Pick option a. Then go.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Pick", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "option", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "a.", "paragraphStart": false, "sentenceEnd": true },
+        { "text": "Then", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "go.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "bare CR / CR-pair line endings are normalized so paragraph boundaries are detected",
+      "input": "one\r\rtwo done.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "one", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "two", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "done.", "paragraphStart": false, "sentenceEnd": true }
       ]
     }
   ]

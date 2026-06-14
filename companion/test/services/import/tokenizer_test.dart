@@ -66,14 +66,31 @@ void main() {
   });
 
   group('tokenize — sentence-end basics (AC3)', () {
-    test('. ! ? terminate a sentence', () {
+    test('. ! ? terminate a sentence (last token also forced terminal)', () {
+      // 'ok' has no terminal punctuation but is the last token of the text, so
+      // the terminal-boundary guarantee forces it to a sentence end.
       final t = tokenize('Stop. Go! Why? ok');
-      expect(_sentenceEnds(t), equals([true, true, true, false]));
+      expect(_sentenceEnds(t), equals([true, true, true, true]));
     });
 
-    test('no-terminal-punctuation tail is not a sentence end', () {
-      final t = tokenize('a clean ending without punctuation');
-      expect(t.last.sentenceEnd, isFalse);
+    test(
+        'mid-text unpunctuated word (end of paragraph, not end of text) is not a '
+        'sentence end', () {
+      // Only the final token of the whole text is forced; a paragraph-ending
+      // word mid-document keeps its computed (false) flag.
+      final t = tokenize('a clean ending without punctuation\n\nmore text.');
+      expect(t[4].text, equals('punctuation'));
+      expect(t[4].sentenceEnd, isFalse);
+      expect(t.last.text, equals('text.'));
+      expect(t.last.sentenceEnd, isTrue);
+    });
+
+    test('last token of the text is forced to a sentence end (FR8/FR10)', () {
+      // Even an abbreviation in final position gets the terminal boundary so the
+      // watch always has a sentence end to coast/rewind to.
+      final t = tokenize('I live in the U.S.');
+      expect(t.last.text, equals('U.S.'));
+      expect(t.last.sentenceEnd, isTrue);
     });
 
     test('terminal punctuation behind a closing quote/paren still counts', () {
@@ -110,6 +127,16 @@ void main() {
       expect(ends['Smith.'], isTrue);
     });
 
+    test('single lowercase letter + period is not a dotted initialism', () {
+      // 'a.' is a real one-letter word ending a sentence — it must NOT be
+      // suppressed, while a genuine multi-letter initialism (U.S.) still is.
+      final t = tokenize('Pick a. Use the U.S. map.');
+      final ends = {for (final Token w in t) w.text: w.sentenceEnd};
+      expect(ends['a.'], isTrue);
+      expect(ends['U.S.'], isFalse);
+      expect(ends['map.'], isTrue);
+    });
+
     test('internal decimal dot does not end a sentence', () {
       final t = tokenize('The value is 3.14 today.');
       final ends = {for (final Token w in t) w.text: w.sentenceEnd};
@@ -134,11 +161,11 @@ void main() {
       expect(tokenize('   \n\t  '), isEmpty);
     });
 
-    test('single word, no punctuation', () {
+    test('single word, no punctuation (forced terminal sentence end)', () {
       final t = tokenize('word');
       expect(t.length, equals(1));
       expect(t.single,
-          equals(const Token(text: 'word', paragraphStart: true, sentenceEnd: false)));
+          equals(const Token(text: 'word', paragraphStart: true, sentenceEnd: true)));
     });
   });
 }

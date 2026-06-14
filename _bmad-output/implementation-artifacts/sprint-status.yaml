@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-14  # story 2.1 → review: pure-Dart sanitize+tokenize done, abbreviation-aware sentence flags, 127/127 CI, analyze clean
+last_updated: 2026-06-14  # story 2.1 → done: code review passed (5 ACs ✓), 4 patches incl. terminal-boundary guarantee + dotted-initialism fix + CR-normalize; 136/136 CI, analyze clean
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -53,7 +53,7 @@ development_status:
 
   # ── Epic 2: Phone Library & Book Conversion ──
   epic-2: in-progress
-  2-1-text-sanitation-tokenization: review
+  2-1-text-sanitation-tokenization: done
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: backlog
   2-3-import-txt-md-into-the-library: backlog
   2-4-import-epub-with-cover-and-chapters: backlog

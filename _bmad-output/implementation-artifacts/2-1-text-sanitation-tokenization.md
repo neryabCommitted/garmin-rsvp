@@ -4,7 +4,7 @@ baseline_commit: 88bb862dda0a35d9a28ee136adab39e9b50a041e
 
 # Story 2.1: Text sanitation & tokenization
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -58,6 +58,18 @@ This is the **first stage** of the Epic 2 import pipeline (`sanitize → tokeniz
   - [x] `cd companion && flutter test` — all pass (127/127; no regression from Epic 1 baseline).
   - [x] `flutter analyze` — clean (strict-casts / strict-inference / strict-raw-types are on).
   - [x] Grep-confirm: no `import 'package:flutter` under `lib/services/import/`.
+
+### Review Findings
+
+_Code review 2026-06-14 (Blind Hunter + Edge Case Hunter + Acceptance Auditor). AC verdict: all 5 ACs satisfied; findings below are correctness gaps beyond the literal spec._
+
+- [x] [Review][Patch] Guarantee a terminal sentence boundary — `tokenizer.dart` `_endsSentence`/`_isSuppressed` can leave the **last token of the text** with `sentenceEnd=false` via three paths: (a) no terminal punctuation (test `tokenizer_test.dart:897-900` enshrines this as expected), (b) ends with an abbreviation/initialism (`U.S.`, `Co.`, `etc.` at end-of-text), (c) ends with a single capital initial (`I.`, `A.`). FR8 two-stage pause coasts to the next `sentenceEnd` and FR10 rewind lands on `sentenceEnd`; a document/chapter with no terminal flag breaks both on-device. **Resolved → Option 1 (Nerya, 2026-06-14):** force the last token of the text to `sentenceEnd=true`. This is the data-baked equivalent of rsvpnano's `currentWordEndsSentence() \|\| atEnd()` (`App.cpp:1883-1894`); their detector hits the same false-negatives but the consumer OR's with `atEnd()` at read time — our bake-once design (FR17) has no read-time fallback, so the guard moves into the baked flag. Update `tokenizer_test.dart:897-900` accordingly. [edge+auditor]
+- [x] [Review][Patch] `_dottedInitialism` over-matches single letter+period — suppresses legitimate lowercase single-letter sentence ends (`"...option a."`, `"...labeled b."`). Regex `^(\p{L}\.)+\p{L}?\.?$` matches a lone `a.`; intent was multi-segment initialisms. Tighten to require ≥2 letter-dot groups. [tokenizer.dart:378-379] [blind+edge]
+- [x] [Review][Patch] Sanitizer does not normalize bare `\r`/`\r\r` line endings — `_paragraphBreak = \n\s*\n` misses CR-only/CR-pair blank lines (classic-Mac / some EPUB extraction), dropping `paragraphStart`. Normalize CR/CRLF→LF in `sanitize()`. [text_sanitizer.dart sanitize] [edge]
+- [x] [Review][Patch] Fixture `_doc` falsely claims inputs use `\u` escapes — inputs are raw invisible codepoints (soft-hyphen/ZWNJ/NBSP). Tests are valid, but invisibles are non-reviewable and silently editable. Fix the doc string (or escape the inputs). [pipeline_cases.json:503] [blind]
+- [x] [Review][Defer] ASCII-fold table is Latin-1 only — `œ`/`ß`/`ā`/`æ`/Latin-Extended-A pass through even with `asciiFold:true` (the exact "missing watch-font glyphs" AC2 targets). Spec sanctioned a "small table"; deferred — revisit when a real EPUB corpus reveals which glyphs actually occur. [text_sanitizer.dart:_foldMap] [edge+auditor]
+
+_Dismissed as noise (3): closer-strip inspects only the single trailing char (contrived `end."a` constructs, not real prose); redundant `e.g`/`i.e` abbreviation-const entries (harmless belt-and-suspenders vs the dotted regex); no asserting pure-Dart guard test (AC5 satisfied via `flutter analyze` + grep)._
 
 ## Dev Notes
 
@@ -174,3 +186,4 @@ claude-opus-4-8 (Amelia / dev-story)
 ## Change Log
 
 - 2026-06-14 — Implemented Story 2.1 (Tasks 1–5): pure-Dart `text_sanitizer.dart` + `tokenizer.dart` under `companion/lib/services/import/`, abbreviation-aware sentence-end, JSON fixture corpus. Added `unorm_dart: 0.3.2`. All ACs satisfied; `flutter test` 127/127, `flutter analyze` clean. Status → review.
+- 2026-06-14 — Code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor); all 5 ACs verified satisfied. Resolved 1 decision + applied 4 patches: (P4/decision, Option 1) terminal-boundary guarantee — `tokenize()` now forces the last token of the text to `sentenceEnd=true` (bake-time equivalent of rsvpnano's `... || atEnd()`; consumer `atEnd()` OR forwarded to Epic 3); (P1) tightened `_dottedInitialism` to `^\p{L}\.(\p{L}\.?)+$` so a single letter+period (`a.`) is no longer suppressed; (P2) `sanitize()` normalizes CR/CRLF→LF so CR-delimited paragraphs are detected; (P3) corrected the fixture `_doc` (raw codepoints, not `\u` escapes). 1 finding deferred (ASCII-fold table is Latin-1-only → deferred-work.md), 3 dismissed as noise. Added 9 tests (4 sanitizer line-ending, 1 single-lowercase-letter lock-in, 2 terminal-boundary, mid-text non-terminal) + 3 fixture cases. `flutter test` 136/136, `flutter analyze` clean. Status → done.
