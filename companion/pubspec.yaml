@@ -44,9 +44,36 @@ dependencies:
   # isolate (AR19). Dart core String has no built-in normalize().
   unorm_dart: 0.3.2
 
+  # State management (Story 2.3) — arch-pinned (architecture.md:202).
+  flutter_riverpod: ^3.3.1
+
+  # Local metadata store (Story 2.3): drift owns Books/Chapters rows; bulk
+  # word-stream bytes live as flat files (stream_store). Stable native setup
+  # (drift + sqlite3_flutter_libs + path_provider + LazyDatabase) — chosen over
+  # the drift_flutter ^0.3.1-wip pre-release (won't resolve; Task 0 decision).
+  drift: ^2.34.0
+  sqlite3_flutter_libs: ^0.5.40
+  path_provider: ^2.1.5
+
+  # Import entry points (Story 2.3): file picker for the testable spine.
+  file_picker: ^8.1.4
+
+  # Markdown import (Story 2.3): md → HTML (markdown) → plain text (html). Both
+  # are pure Dart so html_extractor runs inside the compute isolate (AR19).
+  markdown: ^7.3.0
+  html: ^0.15.5
+
+  # Share-sheet import entry (Story 2.3, Task 8 / AC6): receives .txt/.md shared
+  # from other apps and routes them through the same importFile path.
+  receive_sharing_intent: ^1.8.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  # drift code generation (Story 2.3) — generates database.g.dart.
+  drift_dev: ^2.34.0
+  build_runner: ^2.15.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

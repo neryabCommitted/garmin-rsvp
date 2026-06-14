@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-14  # story 2.2 → done: code review passed (1 test patch — complexity-cap engagement; 4 defers → Gate V4 / Story 2.4); 183 tests pass, analyze clean, AR19 pure
+last_updated: 2026-06-14  # story 2.3 → review: import_service/compute spine + drift Books/Chapters + stream_store + Riverpod/LibraryScreen + share-sheet (Task 8 delivered); 221 tests green, analyze clean, debug APK builds; share-sheet runtime pending manual on-device check
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -55,7 +55,7 @@ development_status:
   epic-2: in-progress
   2-1-text-sanitation-tokenization: done
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
-  2-3-import-txt-md-into-the-library: backlog
+  2-3-import-txt-md-into-the-library: review
   2-4-import-epub-with-cover-and-chapters: backlog
   2-5-book-detail-and-remove: backlog
   2-6-survivable-import-failures: backlog

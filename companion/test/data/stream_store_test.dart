@@ -1,0 +1,86 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:paceturner_companion/data/stream_store.dart';
+
+void main() {
+  late Directory tempDir;
+  late StreamStore store;
+
+  setUp(() async {
+    tempDir = await Directory.systemTemp.createTemp('stream_store_test');
+    store = StreamStore(tempDir);
+  });
+  tearDown(() async {
+    if (await tempDir.exists()) {
+      await tempDir.delete(recursive: true);
+    }
+  });
+
+  final bytes = Uint8List.fromList(<int>[1, 2, 3, 4, 250, 0, 99]);
+  const jsonl = <String>['{"manifest":1}', '{"w":"hi"}'];
+
+  test('write creates .stream + .jsonl and returns an absolute streamPath',
+      () async {
+    final stored = await store.write(
+      streamBytes: bytes,
+      debugJsonl: jsonl,
+      fingerprint: 'abc12345',
+    );
+
+    expect(isAbsolutePath(stored.streamPath), isTrue);
+    expect(stored.streamPath.endsWith('abc12345.stream'), isTrue);
+    expect(await File(stored.streamPath).exists(), isTrue);
+    expect(await File(stored.jsonlPath).exists(), isTrue);
+  });
+
+  test('bytes round-trip equal', () async {
+    final stored = await store.write(
+      streamBytes: bytes,
+      debugJsonl: jsonl,
+      fingerprint: 'abc12345',
+    );
+    final read = await File(stored.streamPath).readAsBytes();
+    expect(read, bytes);
+  });
+
+  test('jsonl is written newline-delimited', () async {
+    final stored = await store.write(
+      streamBytes: bytes,
+      debugJsonl: jsonl,
+      fingerprint: 'abc12345',
+    );
+    final text = await File(stored.jsonlPath).readAsString();
+    expect(text, '{"manifest":1}\n{"w":"hi"}');
+  });
+
+  test('files land under a streams/ subdir', () async {
+    final stored = await store.write(
+      streamBytes: bytes,
+      debugJsonl: jsonl,
+      fingerprint: 'abc12345',
+    );
+    expect(stored.streamPath.contains('${Platform.pathSeparator}streams${Platform.pathSeparator}'),
+        isTrue);
+  });
+
+  test('delete removes both the .stream and the sibling .jsonl', () async {
+    final stored = await store.write(
+      streamBytes: bytes,
+      debugJsonl: jsonl,
+      fingerprint: 'abc12345',
+    );
+    await store.delete(stored.streamPath);
+    expect(await File(stored.streamPath).exists(), isFalse);
+    expect(await File(stored.jsonlPath).exists(), isFalse);
+  });
+
+  test('delete is idempotent — no throw when files are absent', () async {
+    final absent = '${tempDir.path}/streams/nope.stream';
+    await expectLater(store.delete(absent), completes);
+  });
+}
+
+bool isAbsolutePath(String path) =>
+    path.startsWith('/') || RegExp(r'^[A-Za-z]:').hasMatch(path);

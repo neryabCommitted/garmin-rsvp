@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "dev.paceturner.paceturner_companion"
-    compileSdk = flutter.compileSdkVersion
+    // Story 2.3: file_picker's transitive flutter_plugin_android_lifecycle
+    // requires compileSdk 36, above Flutter's current default (35).
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
