@@ -1,0 +1,160 @@
+{
+  "_doc": "Story 2.1 corpus: each case runs sanitize(input, asciiFold) then tokenize() and asserts the full token list (text + flags). Inputs use \\u escapes for invisible/special codepoints so they are explicit. Covers Dev Notes -> Fixture corpus.",
+  "cases": [
+    {
+      "name": "soft-hyphen inside a word collapses to one clean token",
+      "input": "sub­word here",
+      "asciiFold": false,
+      "expected": [
+        { "text": "subword", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "here", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "zero-width char mid-word is stripped",
+      "input": "word‌boundary",
+      "asciiFold": false,
+      "expected": [
+        { "text": "wordboundary", "paragraphStart": true, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "NBSP runs split cleanly with no phantom empty tokens",
+      "input": "alpha  beta gamma",
+      "asciiFold": false,
+      "expected": [
+        { "text": "alpha", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "beta", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "gamma", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "precomposed accent",
+      "input": "café",
+      "asciiFold": false,
+      "expected": [
+        { "text": "café", "paragraphStart": true, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "decomposed accent normalizes identically to precomposed",
+      "input": "café",
+      "asciiFold": false,
+      "expected": [
+        { "text": "café", "paragraphStart": true, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "abbreviation no-split: title and initialism",
+      "input": "Dr. Smith went to the U.S. yesterday.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Dr.", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "Smith", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "went", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "to", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "the", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "U.S.", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "yesterday.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "e.g. and i.e. mid-sentence do not split",
+      "input": "Bring snacks, e.g. chips, i.e. dip.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Bring", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "snacks,", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "e.g.", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "chips,", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "i.e.", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "dip.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "internal decimal dot does not end a sentence",
+      "input": "The value is 3.14 today.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "The", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "value", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "is", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "3.14", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "today.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "ellipsis followed by a question",
+      "input": "Wait... what?",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Wait...", "paragraphStart": true, "sentenceEnd": true },
+        { "text": "what?", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "trailing ellipsis with an unpunctuated tail",
+      "input": "Wait... what",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Wait...", "paragraphStart": true, "sentenceEnd": true },
+        { "text": "what", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "ellipsis character (fold off) is a terminal dot",
+      "input": "Hold on… really",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Hold", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "on…", "paragraphStart": false, "sentenceEnd": true },
+        { "text": "really", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "closing quote and paren after terminal punctuation",
+      "input": "He left.\" She smiled (happily).",
+      "asciiFold": false,
+      "expected": [
+        { "text": "He", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "left.\"", "paragraphStart": false, "sentenceEnd": true },
+        { "text": "She", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "smiled", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "(happily).", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "paragraph boundaries flag the first token of each paragraph",
+      "input": "Para one ends.\n\nPara two starts.",
+      "asciiFold": false,
+      "expected": [
+        { "text": "Para", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "one", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "ends.", "paragraphStart": false, "sentenceEnd": true },
+        { "text": "Para", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "two", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "starts.", "paragraphStart": false, "sentenceEnd": true }
+      ]
+    },
+    {
+      "name": "ASCII-fold OFF: curly quotes, em-dash, accent pass through",
+      "input": "café “hi” em—dash",
+      "asciiFold": false,
+      "expected": [
+        { "text": "café", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "“hi”", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "em—dash", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    },
+    {
+      "name": "ASCII-fold ON: same input folds to ASCII",
+      "input": "café “hi” em—dash",
+      "asciiFold": true,
+      "expected": [
+        { "text": "cafe", "paragraphStart": true, "sentenceEnd": false },
+        { "text": "\"hi\"", "paragraphStart": false, "sentenceEnd": false },
+        { "text": "em-dash", "paragraphStart": false, "sentenceEnd": false }
+      ]
+    }
+  ]
+}

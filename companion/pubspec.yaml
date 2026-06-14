@@ -39,6 +39,11 @@ dependencies:
   # internally; OQ2 (docs/decisions/0002) decides whether it stays for Epic 4.
   watch_connectivity_garmin: ^0.1.13
 
+  # Unicode NFC normalization for the import pipeline (Story 2.1). Pure-Dart
+  # port of unorm.js — zero deps, no Flutter/platform code → runs in the import
+  # isolate (AR19). Dart core String has no built-in normalize().
+  unorm_dart: 0.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
