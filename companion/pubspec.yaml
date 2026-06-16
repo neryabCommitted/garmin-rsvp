@@ -77,6 +77,11 @@ dependencies:
   # since cover_extractor imports it (depend_on_referenced_packages).
   image: ^4.8.0
 
+  # @visibleForTesting for epub_extractor's metadata sanitizer (Story 2.4 review
+  # patch). Declared directly since epub_extractor imports it; already present
+  # transitively (depend_on_referenced_packages).
+  meta: ^1.15.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

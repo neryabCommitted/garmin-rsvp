@@ -4,7 +4,7 @@ baseline_commit: 099b7afb80895495cac8fc5871713c9aa63e54ec
 
 # Story 2.4: Import EPUB with cover and chapters
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -104,6 +104,18 @@ This is the **EPUB path of Epic 2**, built directly on the 2.3 integration spine
   - [x] **AR §452 purity grep:** no `package:flutter/*` and no `dart:io` in the **pure** modules (`epub_extractor.dart`, `cover_extractor.dart`, `runEpubPipeline`, `extractFromHtml`). `import_service.dart`/`stream_store.dart`/`ui/` MAY use Flutter/`dart:io` (impure shell) — that's correct.
   - [x] Confirm layering (architecture.md:452): `ui/ → services/ → data/`. `ui/` reads the cover only via the `Book.coverPath` string + `Image.file` — it does **not** import `stream_store`/`drift` directly.
   - [x] `flutter build apk --debug` to confirm the new native-free dep assembles (epub_pro is pure Dart — no Gradle changes expected, unlike 2.3's plugins).
+
+### Review Findings
+
+_Code review 2026-06-16 (Blind Hunter + Edge Case Hunter + Acceptance Auditor). All 6 ACs satisfied; no scope violations. Resolved: 2 decision-needed (1 dismissed-after-verification, 1 patched), 2 patched, 4 deferred, 7 dismissed as noise._
+
+- [x] [Review][Decision→Dismiss] Anchored-TOC text duplication — VERIFIED FALSE against `epub_pro` 5.6.0 source. `readHtmlContent()` does return the full content file ignoring the anchor (`epub_chapter_ref.dart:44-45`), but the production path `bookRef.getChapters()` → `ChapterReader.getChapters` dedups by base content-file via a shared `seenContentFiles` set (`chapter_reader.dart:84-85, 177-181`), so multiple `#anchor` entries on one file collapse to a single chapter node. No duplicate node → no duplicated prose, no inflated word count. Effect is only chapter-granularity loss on anchor-split single-file books (text baked once, correctly). No change needed.
+- [x] [Review][Decision→Patch] Dead `extractCover(EpubBook)` after the `readCover()` pivot — runtime uses `bookRef.readCover()` + `encodeCover()` (`epub_extractor.dart:102-107`); `extractCover` was called only by its own test. Deleted the dead function + its test; kept the live `encodeCover`.
+- [x] [Review][Patch] `title`/`author` bypass token validation — pathological OPF metadata (unpaired UTF-16 surrogate) can throw at the drift/SQLite insert, mapping to `ioError` and rolling back an otherwise-good book; chapter words are guarded by `stream_codec` but metadata is not [`import_service.dart:232-237`, `epub_extractor.dart:114-115`]. Fixed: metadata sanitized in the extractor before crossing the persist boundary.
+- [x] [Review][Defer] `_classifyParseError` string-matches the exception message — brittle/locale-dependent; mislabels `unreadable`↔`unsupported` [`import_service.dart:284-292`] — deferred, fine failure taxonomy explicitly scoped to 2.6.
+- [x] [Review][Defer] Nested-`<table>` prose duplicated by `_linearizeTable` — `querySelectorAll('tr')` matches descendant rows so nested-table text is emitted twice [`html_extractor.dart:132-148`] — deferred, ugly-HTML edge belongs to the 2.6 corpus suite.
+- [x] [Review][Defer] Cover `catch (_)` swallows all errors incl. OOM; cover decode is unbounded on input dimensions (`kMaxCoverDimension` caps output only) — huge cover can OOM the isolate [`epub_extractor.dart:101-111`] — deferred, robustness hardening / 2.6.
+- [x] [Review][Defer] Re-importing the same EPUB creates a duplicate book (time-based salt → unique fingerprint, no content dedup) [`import_service.dart:99, 216-254`] — deferred, dedup is a later product decision (not corruption).
 
 ## Dev Notes
 

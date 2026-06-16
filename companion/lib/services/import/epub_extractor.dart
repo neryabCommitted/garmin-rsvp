@@ -33,6 +33,7 @@ library;
 import 'dart:typed_data';
 
 import 'package:epub_pro/epub_pro.dart';
+import 'package:meta/meta.dart';
 
 import 'cover_extractor.dart';
 import 'html_extractor.dart';
@@ -139,10 +140,45 @@ void _flatten(EpubChapter node, List<BakeChapter> out) {
   }
 }
 
+/// Normalizes EPUB metadata (title, author, chapter title) for persistence:
+/// strips unpaired UTF-16 surrogates, trims, and collapses blank → null.
+///
+/// Unlike chapter *words* — guarded by the baker's `stream_codec` surrogate /
+/// byte-length checks — title/author/chapter-title bypass tokenization and go
+/// straight to the drift insert. A pathological OPF carrying an unpaired
+/// surrogate would otherwise throw at the SQLite (UTF-8) boundary, surface as
+/// `ioError`, and roll back an EPUB whose actual content was fine. Stripping
+/// the lone surrogates here keeps a bad-metadata book importable.
 String? _nonBlank(String? s) {
   if (s == null) {
     return null;
   }
-  final trimmed = s.trim();
+  final trimmed = stripUnpairedSurrogates(s).trim();
   return trimmed.isEmpty ? null : trimmed;
+}
+
+/// Drops lone high/low UTF-16 surrogate code units (keeps valid surrogate
+/// pairs intact), so the result encodes to valid UTF-8 for SQLite.
+@visibleForTesting
+String stripUnpairedSurrogates(String s) {
+  final units = s.codeUnits;
+  final out = StringBuffer();
+  for (var i = 0; i < units.length; i++) {
+    final u = units[i];
+    if (u >= 0xD800 && u <= 0xDBFF) {
+      // High surrogate: emit only if followed by a low surrogate.
+      final hasLow =
+          i + 1 < units.length && units[i + 1] >= 0xDC00 && units[i + 1] <= 0xDFFF;
+      if (hasLow) {
+        out
+          ..writeCharCode(u)
+          ..writeCharCode(units[i + 1]);
+        i++;
+      }
+    } else if (u < 0xDC00 || u > 0xDFFF) {
+      // Not a lone low surrogate → keep.
+      out.writeCharCode(u);
+    }
+  }
+  return out.toString();
 }

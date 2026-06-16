@@ -1,5 +1,5 @@
 # generated: 2026-06-09
-# last_updated: 2026-06-13  # story 1.5 → review: gate V3 passed (transport cap 11584 B; watch decode-watchdog → Epic 4 decodes incrementally)
+# last_updated: 2026-06-16  # story 2.4 → done: code review passed
 # project: garmin_RSVP
 # project_key: NOKEY
 # tracking_system: file-system
@@ -56,8 +56,8 @@ development_status:
   2-1-text-sanitation-tokenization: done
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
   2-3-import-txt-md-into-the-library: done
-  2-4-import-epub-with-cover-and-chapters: review
-  2-5-book-detail-and-remove: backlog  # 2.4 → review (dev-story) 2026-06-16: EPUB import, 262 tests green
+  2-4-import-epub-with-cover-and-chapters: done
+  2-5-book-detail-and-remove: backlog  # 2.4 → done (code-review) 2026-06-16: review passed; 1 High verified-false (epub_pro dedups anchors), 2 patches (dead extractCover removed, metadata surrogate strip), 4 deferred to 2.6; 266 tests green
   2-6-survivable-import-failures: backlog
   epic-2-retrospective: optional
 

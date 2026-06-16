@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/services/import/epub_extractor.dart';
 
@@ -85,6 +87,34 @@ void main() {
   group('extractEpub — corrupt input surfaces as a throw (AC5)', () {
     test('non-zip bytes throw (mapped to unreadable by import_service)', () async {
       await expectLater(extractEpub(corruptEpubBytes()), throwsA(anything));
+    });
+  });
+
+  group('metadata sanitation — title/author/chapter-title (Review patch)', () {
+    test('lone high surrogate is dropped; result is UTF-8 encodable', () {
+      final clean = stripUnpairedSurrogates('Bad\uD800Title');
+      expect(clean, 'BadTitle');
+      expect(() => utf8.encode(clean), returnsNormally);
+    });
+
+    test('lone low surrogate is dropped', () {
+      expect(stripUnpairedSurrogates('Au\uDC00thor'), 'Author');
+    });
+
+    test('valid surrogate pair (emoji) is preserved', () {
+      const emoji = '\u{1F600}'; // 😀 — a well-formed D83D DE00 pair
+      final out = stripUnpairedSurrogates('Hi $emoji');
+      expect(out, 'Hi $emoji');
+      expect(() => utf8.encode(out), returnsNormally);
+    });
+
+    test('high surrogate immediately followed by a non-low char drops the lone half', () {
+      // High surrogate, then a BMP char (not a low surrogate).
+      expect(stripUnpairedSurrogates('A\uD800B'), 'AB');
+    });
+
+    test('plain text is untouched', () {
+      expect(stripUnpairedSurrogates('Ada Author — Æ ß 漢'), 'Ada Author — Æ ß 漢');
     });
   });
 }

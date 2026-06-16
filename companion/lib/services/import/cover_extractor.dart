@@ -8,14 +8,12 @@
 /// it is a phone-only sidecar referenced by `Books.cover_path`
 /// (architecture.md:178,589).
 ///
-/// Pure Dart: `package:image` and `package:epub_pro` are pure Dart — no
-/// `package:flutter/*`, no `dart:io` — so this runs unchanged inside `compute`
-/// (AR §452 / AR19).
+/// Pure Dart: `package:image` is pure Dart — no `package:flutter/*`, no
+/// `dart:io` — so this runs unchanged inside `compute` (AR §452 / AR19).
 library;
 
 import 'dart:typed_data';
 
-import 'package:epub_pro/epub_pro.dart';
 import 'package:image/image.dart' as img;
 
 /// Longest-side cap for the stored cover, to bound the on-disk thumbnail size.
@@ -24,20 +22,10 @@ const int kMaxCoverDimension = 600;
 /// JPEG quality for the re-encoded cover.
 const int _coverJpegQuality = 80;
 
-/// Extracts [book]'s cover as `(bytes, format)`, or null when the EPUB carries
-/// no cover (a valid case — AC2). The image is downscaled to [kMaxCoverDimension]
-/// on its longest side (aspect preserved) and re-encoded as JPEG to bound size.
-({Uint8List bytes, String format})? extractCover(EpubBook book) {
-  final image = book.coverImage;
-  if (image == null) {
-    return null;
-  }
-  return encodeCover(image);
-}
-
 /// Downscales and re-encodes a decoded cover [image] to bounded JPEG bytes.
-/// Split out so the extractor can encode a cover read via the lazy
-/// `EpubBookRef.readCover()` path without materializing a whole [EpubBook].
+/// Encodes a cover read via the lazy `EpubBookRef.readCover()` path; the
+/// no-cover case (a valid state — AC2) is handled by the caller, which only
+/// calls this when `readCover()` returns a non-null image.
 ({Uint8List bytes, String format}) encodeCover(img.Image image) {
   final bounded = _downscale(image);
   final bytes = img.encodeJpg(bounded, quality: _coverJpegQuality);
