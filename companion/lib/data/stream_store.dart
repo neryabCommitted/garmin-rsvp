@@ -37,9 +37,16 @@ class StreamStore {
   static const String _streamExt = '.stream';
   static const String _jsonlExt = '.jsonl';
 
-  Future<Directory> _streamsDir() async {
+  Future<Directory> _streamsDir() => _subDir('streams');
+
+  /// Covers live in a sibling `covers/` subdir (Story 2.4, AC2) — kept apart
+  /// from the `.stream`/`.jsonl` artifacts so the phone-only cover never
+  /// co-mingles with the word stream.
+  Future<Directory> _coversDir() => _subDir('covers');
+
+  Future<Directory> _subDir(String name) async {
     final base = _baseDir ?? await getApplicationSupportDirectory();
-    final dir = Directory('${base.path}${Platform.pathSeparator}streams');
+    final dir = Directory('${base.path}${Platform.pathSeparator}$name');
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -74,6 +81,39 @@ class StreamStore {
       streamPath: streamFile.path,
       jsonlPath: jsonlFile.path,
     );
+  }
+
+  /// Writes the cover image to `covers/<fingerprint>.<ext>` and returns its
+  /// absolute path (goes in `Books.cover_path`). The cover is phone-only — it
+  /// never enters the word stream or the protocol (AC2). Atomic like [write]: a
+  /// failed write leaves no partial file behind (2.3 review patch — rollback
+  /// must cover the cover too).
+  Future<String> writeCover({
+    required Uint8List bytes,
+    required String fingerprint,
+    required String format,
+  }) async {
+    final dir = await _coversDir();
+    final ext = format.startsWith('.') ? format : '.$format';
+    final file = File('${dir.path}${Platform.pathSeparator}$fingerprint$ext');
+    try {
+      await file.writeAsBytes(bytes, flush: true);
+    } catch (_) {
+      if (await file.exists()) {
+        await file.delete();
+      }
+      rethrow;
+    }
+    return file.path;
+  }
+
+  /// Deletes the cover file at [coverPath]. Idempotent — no throw if it is
+  /// already gone (AC5 rollback / 2.5 Remove).
+  Future<void> deleteCover(String coverPath) async {
+    final file = File(coverPath);
+    if (await file.exists()) {
+      await file.delete();
+    }
   }
 
   /// Deletes the `.stream` at [streamPath] and its sibling `.jsonl`. Idempotent —

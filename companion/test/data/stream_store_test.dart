@@ -81,6 +81,48 @@ void main() {
     await expectLater(store.delete(absent), completes);
   });
 
+  group('cover (Story 2.4, AC2)', () {
+    final coverBytes = Uint8List.fromList(<int>[137, 80, 78, 71, 1, 2, 3]);
+
+    test('writeCover writes covers/<fingerprint>.<ext> and returns abs path',
+        () async {
+      final path = await store.writeCover(
+        bytes: coverBytes,
+        fingerprint: 'abc12345',
+        format: 'jpg',
+      );
+      expect(isAbsolutePath(path), isTrue);
+      expect(path.endsWith('abc12345.jpg'), isTrue);
+      expect(
+        path.contains('${Platform.pathSeparator}covers${Platform.pathSeparator}'),
+        isTrue,
+      );
+      expect(await File(path).exists(), isTrue);
+      expect(await File(path).readAsBytes(), coverBytes);
+    });
+
+    test('writeCover normalizes a format with a leading dot', () async {
+      final path = await store.writeCover(
+        bytes: coverBytes,
+        fingerprint: 'def67890',
+        format: '.png',
+      );
+      expect(path.endsWith('def67890.png'), isTrue);
+      expect(path.contains('..'), isFalse);
+    });
+
+    test('deleteCover removes the file and is idempotent', () async {
+      final path = await store.writeCover(
+        bytes: coverBytes,
+        fingerprint: 'abc12345',
+        format: 'jpg',
+      );
+      await store.deleteCover(path);
+      expect(await File(path).exists(), isFalse);
+      await expectLater(store.deleteCover(path), completes);
+    });
+  });
+
   test('write leaves no orphan .stream when the .jsonl write fails (AC7)',
       () async {
     // Force the .jsonl write to throw by parking a directory where the sibling

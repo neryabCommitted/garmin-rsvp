@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-15  # story 2.3 → done: code review passed (3 adversarial layers); 2 patches applied (AC7 orphan-stream atomicity in stream_store.write + share-sheet reset() ordering), 5 items deferred (share-sheet hardening + failure-taxonomy → 2.6); 222 tests green, analyze clean; share-sheet runtime still pending manual on-device check
+last_updated: 2026-06-16  # story 2.4 → ready-for-dev (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -56,8 +56,8 @@ development_status:
   2-1-text-sanitation-tokenization: done
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
   2-3-import-txt-md-into-the-library: done
-  2-4-import-epub-with-cover-and-chapters: backlog
-  2-5-book-detail-and-remove: backlog
+  2-4-import-epub-with-cover-and-chapters: review
+  2-5-book-detail-and-remove: backlog  # 2.4 → review (dev-story) 2026-06-16: EPUB import, 262 tests green
   2-6-survivable-import-failures: backlog
   epic-2-retrospective: optional
 

@@ -59,6 +59,76 @@ void main() {
     });
   });
 
+  group('extractFromHtml — shared core (no filter)', () {
+    test('walks block elements into blank-line-separated paragraphs', () {
+      const html = '<html><body><p>First.</p><p>Second.</p></body></html>';
+      expect(extractFromHtml(html), 'First.\n\nSecond.');
+    });
+
+    test('soft line breaks inside a block collapse to spaces', () {
+      const html = '<body><p>one\ntwo\nthree</p></body>';
+      expect(extractFromHtml(html), 'one two three');
+    });
+
+    test('script/style are dropped', () {
+      const html = '<body><p>Keep.</p><script>evil()</script></body>';
+      expect(extractFromHtml(html), 'Keep.');
+    });
+  });
+
+  group('extractFromHtml — EPUB pre-filter (AC1)', () {
+    test('drops noteref/footnote subtree marked by epub:type', () {
+      const html = '<body><p>Before NOTEREFMARK'
+          '<a epub:type="noteref" href="#fn1">99</a> after.</p></body>';
+      final out = extractFromHtml(html, epubFilter: true);
+      expect(out.contains('99'), isFalse, reason: 'footnote anchor text dropped');
+      expect(out, contains('Before NOTEREFMARK'));
+      expect(out, contains('after.'));
+    });
+
+    test('drops an <a> footnote ref marked by class', () {
+      const html =
+          '<body><p>Text <a class="footnote" href="#f">CLASSFNMARK</a> end.</p></body>';
+      final out = extractFromHtml(html, epubFilter: true);
+      expect(out.contains('CLASSFNMARK'), isFalse);
+      expect(out, contains('Text'));
+      expect(out, contains('end.'));
+    });
+
+    test('drops <rt>/<rp> ruby readings, keeps the base text', () {
+      const html =
+          '<body><p><ruby>漢<rt>kan</rt>字<rp>(</rp><rt>ji</rt><rp>)</rp></ruby> word.</p></body>';
+      final out = extractFromHtml(html, epubFilter: true);
+      expect(out.contains('kan'), isFalse);
+      expect(out.contains('ji'), isFalse);
+      expect(out, contains('漢'));
+      expect(out, contains('字'));
+      expect(out, contains('word.'));
+    });
+
+    test('image alt/title text is never read (assert-and-lock)', () {
+      const html =
+          '<body><p>Caption <img src="x.png" alt="ALTVANISH" title="TITLEVANISH"/> only.</p></body>';
+      final out = extractFromHtml(html, epubFilter: true);
+      expect(out.contains('ALTVANISH'), isFalse);
+      expect(out.contains('TITLEVANISH'), isFalse);
+      expect(out, contains('Caption'));
+    });
+
+    test('tables are linearized: each row one block, cells inline', () {
+      const html = '<body><table>'
+          '<tr><td>Cell A</td><td>Cell B</td></tr>'
+          '<tr><td>Cell C</td><td>Cell D</td></tr>'
+          '</table></body>';
+      expect(extractFromHtml(html, epubFilter: true), 'Cell A Cell B\n\nCell C Cell D');
+    });
+
+    test('without the filter a plain paragraph is unchanged', () {
+      const html = '<body><p>Plain text.</p></body>';
+      expect(extractFromHtml(html, epubFilter: false), 'Plain text.');
+    });
+  });
+
   group('paragraph boundary survives the full extract→sanitize→tokenize chain',
       () {
     test('first token of paragraph 2 has paragraphStart == true (md)', () {

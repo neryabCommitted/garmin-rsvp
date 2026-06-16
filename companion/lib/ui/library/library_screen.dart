@@ -63,7 +63,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
     final picked = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: const <String>['txt', 'md', 'markdown'],
+      allowedExtensions: const <String>['txt', 'md', 'markdown', 'epub'],
       withData: true,
     );
     final file = picked?.files.singleOrNull;
@@ -189,21 +189,71 @@ class _BookList extends StatelessWidget {
       itemCount: books.length,
       itemBuilder: (context, index) {
         final book = books[index];
+        final author = book.author;
         return ListTile(
+          // M3 ListTile with a cover thumbnail (AC4); placeholder when none.
+          leading: _CoverThumbnail(coverPath: book.coverPath),
           title: Text(book.title),
-          // last-read placeholder (lastReadEpochS is null until Epic 4).
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
-            children: const <Widget>[
-              Text('Not started'),
-              SizedBox(height: 4),
+            children: <Widget>[
+              // OPF author (AC4); the line is omitted when there is no author.
+              if (author != null && author.isNotEmpty) Text(author),
+              // last-read placeholder (lastReadEpochS is null until Epic 4).
+              const Text('Not started'),
+              const SizedBox(height: 4),
               // Thin 0% progress bar (UI placeholder — no Positions table yet).
-              LinearProgressIndicator(value: 0),
+              const LinearProgressIndicator(value: 0),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// The library-row cover thumbnail (AC4): the cover file when present, else an
+/// M3 placeholder. A missing/unreadable file falls back to the placeholder via
+/// [Image.file]'s `errorBuilder` rather than throwing.
+class _CoverThumbnail extends StatelessWidget {
+  const _CoverThumbnail({required this.coverPath});
+
+  final String? coverPath;
+
+  static const double _width = 40;
+  static const double _height = 56;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(4);
+    final path = coverPath;
+    if (path == null) {
+      return _placeholder(context, radius);
+    }
+    return ClipRRect(
+      borderRadius: radius,
+      child: Image.file(
+        File(path),
+        width: _width,
+        height: _height,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) =>
+            _placeholder(context, radius),
+      ),
+    );
+  }
+
+  Widget _placeholder(BuildContext context, BorderRadius radius) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: _width,
+      height: _height,
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: radius,
+      ),
+      child: Icon(Icons.menu_book, color: scheme.onSurfaceVariant),
     );
   }
 }

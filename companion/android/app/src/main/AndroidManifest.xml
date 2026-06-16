@@ -25,15 +25,16 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
 
-            <!-- Story 2.3 Task 8 (AC6): receive .txt/.md shared from other apps,
-                 routed to the same import_service path. Scoped to text/plain and
-                 text/markdown so the app does not advertise itself as a sink for
-                 arbitrary files (EPUB lands in 2.4). -->
+            <!-- Story 2.3 Task 8 / 2.4 Task 8 (AC6): receive .txt/.md/.epub shared
+                 from other apps, routed to the same import_service path. EPUB is
+                 application/epub+zip; the share handler reads the real file's
+                 bytes (binary-safe), so it must not go through the text path. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="text/plain"/>
                 <data android:mimeType="text/markdown"/>
+                <data android:mimeType="application/epub+zip"/>
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
@@ -41,6 +42,7 @@
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:mimeType="text/plain"/>
                 <data android:mimeType="text/markdown"/>
+                <data android:mimeType="application/epub+zip"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

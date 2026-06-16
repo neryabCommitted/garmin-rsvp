@@ -67,13 +67,33 @@ dependencies:
   # from other apps and routes them through the same importFile path.
   receive_sharing_intent: ^1.8.0
 
+  # EPUB parsing (Story 2.4): OCF/OPF/spine/TOC → real chapters + decoded cover.
+  # Pure Dart (no dart:io) — transitively pulls archive/xml/image/collection,
+  # all pure Dart — so epub_extractor runs inside the compute isolate (AR19).
+  epub_pro: ^5.6.0
+
+  # Cover re-encode/downscale (Story 2.4, cover_extractor): decoded img.Image →
+  # bounded JPEG bytes. Pure Dart (epub_pro's own cover dep) — declared directly
+  # since cover_extractor imports it (depend_on_referenced_packages).
+  image: ^4.8.0
+
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+
+  # On-device import verification (Story 2.4 manual hardware check). Drives the
+  # real ImportService against a real EPUB staged in the app's external files
+  # dir — exercises the real compute isolate + sqlite + cover-file write.
+  integration_test:
     sdk: flutter
 
   # drift code generation (Story 2.3) — generates database.g.dart.
   drift_dev: ^2.34.0
   build_runner: ^2.15.0
+
+  # Synthetic EPUB test-fixture builder (Story 2.4, Task 1) assembles OCF zips
+  # in memory via ZipEncoder. Test-only (epub_pro's own transitive dep).
+  archive: ^4.0.9
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

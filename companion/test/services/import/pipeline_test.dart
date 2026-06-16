@@ -1,5 +1,11 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:paceturner_companion/protocol/protocol_keys.dart';
+import 'package:paceturner_companion/protocol/stream_codec.dart';
 import 'package:paceturner_companion/services/import/pipeline.dart';
+
+import '../../fixtures/epubs/epub_fixture_builder.dart';
 
 void main() {
   group('runPipeline — .txt', () {
@@ -69,6 +75,49 @@ void main() {
         salt: 0,
       );
       expect(() => runPipeline(req), throwsArgumentError);
+    });
+  });
+
+  group('runEpubPipeline — multi-chapter EPUB (Story 2.4, AC3)', () {
+    test('clean 3-chapter fixture bakes 3 chapters + surfaces author', () async {
+      final out = await runEpubPipeline(
+        EpubPipelineRequest(epubBytes: cleanThreeChapterEpub(), salt: 7),
+      );
+
+      expect(out.baked.manifest.title, 'A Clean Book');
+      expect(out.baked.manifest.chapters.length, 3);
+      expect(out.author, 'Ada Author');
+      expect(out.coverBytes, isNotNull);
+      expect(out.coverFormat, 'jpg');
+      expect(out.baked.streamBytes, isNotEmpty);
+      expect(out.baked.manifest.fingerprint, matches(RegExp(r'^[0-9a-f]{8}$')));
+    });
+
+    test('chapterStart flag set on the first word of chapter 2', () async {
+      final out = await runEpubPipeline(
+        EpubPipelineRequest(epubBytes: cleanThreeChapterEpub(), salt: 7),
+      );
+      final manifest = out.baked.manifest;
+      final records = decodeChunk(
+        Uint8List.fromList(out.baked.streamBytes),
+        manifest.totalWords,
+      );
+
+      final ch2Offset = manifest.chapters[1].offset;
+      expect(ch2Offset, greaterThan(0));
+      expect(records[ch2Offset].flags & ProtocolKeys.flagChapterStart, isNonZero);
+      // A mid-chapter word does not carry the chapter-start flag.
+      expect(records[ch2Offset + 1].flags & ProtocolKeys.flagChapterStart, 0);
+    });
+
+    test('is deterministic for a fixed salt', () async {
+      final a = await runEpubPipeline(
+        EpubPipelineRequest(epubBytes: cleanThreeChapterEpub(), salt: 99),
+      );
+      final b = await runEpubPipeline(
+        EpubPipelineRequest(epubBytes: cleanThreeChapterEpub(), salt: 99),
+      );
+      expect(a.baked.manifest.fingerprint, b.baked.manifest.fingerprint);
     });
   });
 }

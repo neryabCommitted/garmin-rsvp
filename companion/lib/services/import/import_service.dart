@@ -19,12 +19,14 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart' show compute;
 
 import '../../data/db/database.dart';
 import '../../data/stream_store.dart';
+import 'epub_extractor.dart';
 import 'pipeline.dart';
 import 'word_stream_baker.dart';
 
@@ -62,18 +64,35 @@ Future<BakedBook> _computeRunner(
 ) =>
     compute(entry, request);
 
+/// The `compute`-runner seam for the EPUB path (mirrors [PipelineRunner]). The
+/// entry is async because `EpubReader.readBook` is async; tests pass a
+/// synchronous override so they never spawn an isolate.
+typedef EpubPipelineRunner = Future<EpubBaked> Function(
+  Future<EpubBaked> Function(EpubPipelineRequest) entry,
+  EpubPipelineRequest request,
+);
+
+Future<EpubBaked> _computeEpubRunner(
+  Future<EpubBaked> Function(EpubPipelineRequest) entry,
+  EpubPipelineRequest request,
+) =>
+    compute(entry, request);
+
 class ImportService {
   ImportService(
     this._db,
     this._store, {
     PipelineRunner? runner,
+    EpubPipelineRunner? epubRunner,
     int Function()? saltSource,
   })  : _runner = runner ?? _computeRunner,
+        _epubRunner = epubRunner ?? _computeEpubRunner,
         _saltSource = saltSource ?? _defaultSalt;
 
   final AppDatabase _db;
   final StreamStore _store;
   final PipelineRunner _runner;
+  final EpubPipelineRunner _epubRunner;
   final int Function() _saltSource;
 
   static int _defaultSalt() =>
@@ -81,11 +100,19 @@ class ImportService {
 
   /// Imports one file: bake off the UI thread, then persist stream + drift rows.
   /// Returns [ImportSuccess] or a typed [ImportFailure] — never throws (AC7).
+  /// Dispatches `.epub` to [_importEpub]; everything else takes the txt/md path.
   Future<ImportResult> importFile({
     required String path,
     required List<int> bytes,
   }) async {
     final filename = _basename(path);
+    if (_isEpub(filename)) {
+      return _importEpub(filename, bytes);
+    }
+    return _importText(filename, bytes);
+  }
+
+  Future<ImportResult> _importText(String filename, List<int> bytes) async {
     final title = _stripExtension(filename);
     final isMarkdown = _isMarkdown(filename);
 
@@ -152,10 +179,116 @@ class ImportService {
     }
   }
 
+  /// The `.epub` path (AC1·AC2·AC3·AC5): parse + bake off the UI thread, then
+  /// persist the stream, the phone-only cover file, and the drift rows (Books +
+  /// one Chapters row per manifest chapter). Never throws — every failure maps
+  /// to a typed [ImportFailure], rolling back the stream AND cover together
+  /// (AC5 no-partial-state).
+  Future<ImportResult> _importEpub(String filename, List<int> bytes) async {
+    // Parse + bake in the isolate. The EPUB is a ZIP — NEVER utf8.decode it.
+    final EpubBaked epubBaked;
+    try {
+      epubBaked = await _epubRunner(
+        runEpubPipeline,
+        EpubPipelineRequest(
+          epubBytes: Uint8List.fromList(bytes),
+          salt: _saltSource(),
+        ),
+      );
+    } on EpubEmptyContentException {
+      // No tokens (empty spine / nav-only / all-symbol). Nothing written yet.
+      return ImportFailure(ImportFailureReason.emptyContent, filename);
+    } catch (e) {
+      // Corrupt/DRM/unsupported parse, or a bake bug. Nothing written yet, so no
+      // rollback needed. (The fine-grained taxonomy is 2.6; here we just don't
+      // crash and map the obvious cases.)
+      return ImportFailure(_classifyParseError(e), filename);
+    }
+
+    // Persist on the main isolate: stream → cover → drift rows. Any failure here
+    // is I/O-class; roll back the stream and cover before returning (AC5).
+    StoredStream? stored;
+    String? coverPath;
+    try {
+      final baked = epubBaked.baked;
+      final manifest = baked.manifest;
+
+      stored = await _store.write(
+        streamBytes: baked.streamBytes,
+        debugJsonl: baked.debugJsonl,
+        fingerprint: manifest.fingerprint,
+      );
+
+      if (epubBaked.coverBytes != null) {
+        coverPath = await _store.writeCover(
+          bytes: epubBaked.coverBytes!,
+          fingerprint: manifest.fingerprint,
+          format: epubBaked.coverFormat ?? 'jpg',
+        );
+      }
+
+      final streamPath = stored.streamPath;
+      final bookId = await _db.transaction(() async {
+        final id = await _db.insertBook(BooksCompanion(
+          title: Value(manifest.title),
+          author: Value<String?>(epubBaked.author),
+          coverPath: Value<String?>(coverPath),
+          streamPath: Value(streamPath),
+          fingerprint: Value(manifest.fingerprint),
+          totalWords: Value(manifest.totalWords),
+          totalBonusMs: Value(manifest.totalBonusMs),
+          createdAtEpochS: Value(_nowEpochS()),
+          lastReadEpochS: const Value<int?>(null),
+        ));
+        await _db.insertChapters(<ChaptersCompanion>[
+          for (var i = 0; i < manifest.chapters.length; i++)
+            ChaptersCompanion(
+              bookId: Value(id),
+              chapterIndex: Value(i),
+              title: Value(manifest.chapters[i].title),
+              wordOffset: Value(manifest.chapters[i].offset),
+              cumulativeBonusMs: Value(manifest.chapters[i].cumulativeBonusMs),
+            ),
+        ]);
+        return id;
+      });
+
+      return ImportSuccess(bookId);
+    } catch (_) {
+      await _rollbackEpub(stored, coverPath);
+      return ImportFailure(ImportFailureReason.ioError, filename);
+    }
+  }
+
   Future<void> _rollback(StoredStream? stored) async {
     if (stored != null) {
       await _store.delete(stored.streamPath);
     }
+  }
+
+  /// AC5 rollback for the EPUB path: delete the stream pair AND the cover file
+  /// so no partial state (no row was committed — the transaction rolls itself
+  /// back — and no `.stream`/`.jsonl`/cover may survive).
+  Future<void> _rollbackEpub(StoredStream? stored, String? coverPath) async {
+    if (stored != null) {
+      await _store.delete(stored.streamPath);
+    }
+    if (coverPath != null) {
+      await _store.deleteCover(coverPath);
+    }
+  }
+
+  /// Maps an EPUB *parse* error to a typed reason (minimal seam — NOT the 2.6
+  /// taxonomy). DRM/encrypted/obfuscated → `unsupported`; everything else
+  /// (corrupt/non-zip/malformed structure) → `unreadable`.
+  ImportFailureReason _classifyParseError(Object error) {
+    final message = error.toString().toLowerCase();
+    if (message.contains('encrypt') ||
+        message.contains('drm') ||
+        message.contains('obfusc')) {
+      return ImportFailureReason.unsupported;
+    }
+    return ImportFailureReason.unreadable;
   }
 
   static int _nowEpochS() => DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -176,3 +309,5 @@ bool _isMarkdown(String filename) {
   final lower = filename.toLowerCase();
   return lower.endsWith('.md') || lower.endsWith('.markdown');
 }
+
+bool _isEpub(String filename) => filename.toLowerCase().endsWith('.epub');
