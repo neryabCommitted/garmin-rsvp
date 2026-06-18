@@ -16,6 +16,7 @@ import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../data/db/database.dart';
 import '../../services/import/import_service.dart';
+import 'book_detail_screen.dart';
 import 'library_providers.dart';
 import 'share_receiver.dart';
 
@@ -193,6 +194,13 @@ class _BookList extends StatelessWidget {
         return ListTile(
           // M3 ListTile with a cover thumbnail (AC4); placeholder when none.
           leading: _CoverThumbnail(coverPath: book.coverPath),
+          // Row tap → book detail (Story 2.5). The app has no router; a plain
+          // Navigator.push is the M3-idiomatic choice for a two-screen app.
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => BookDetailScreen(bookId: book.id),
+            ),
+          ),
           title: Text(book.title),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,

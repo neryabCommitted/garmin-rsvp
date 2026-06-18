@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/db/database.dart';
 import '../../data/stream_store.dart';
 import '../../services/import/import_service.dart';
+import '../../services/library/library_service.dart';
 
 /// The single on-device drift connection. Closed when the scope disposes.
 final databaseProvider = Provider<AppDatabase>((ref) {
@@ -31,4 +32,24 @@ final importServiceProvider = Provider<ImportService>(
 /// Reactive library list (FR16-ready), driven by drift's `watchAllBooks`.
 final libraryProvider = StreamProvider<List<Book>>(
   (ref) => ref.watch(databaseProvider).watchAllBooks(),
+);
+
+/// Reactive single book for the detail screen (2.5, AC1). Emits null once the
+/// row is removed — the detail screen pops on that null.
+final bookDetailProvider = StreamProvider.family<Book?, int>(
+  (ref, id) => ref.watch(databaseProvider).watchBookById(id),
+);
+
+/// Reactive chapter list for the detail screen (2.5, AC1), in reading order.
+final chaptersProvider = StreamProvider.family<List<Chapter>, int>(
+  (ref, id) => ref.watch(databaseProvider).chaptersForBook(id),
+);
+
+/// Library-management service (2.5, AC3) — coordinates Remove behind the
+/// ui→services→data layering. Constructor-injected (architecture.md:285).
+final libraryServiceProvider = Provider<LibraryService>(
+  (ref) => LibraryService(
+    ref.watch(databaseProvider),
+    ref.watch(streamStoreProvider),
+  ),
 );

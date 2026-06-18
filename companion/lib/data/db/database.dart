@@ -78,6 +78,21 @@ class AppDatabase extends _$AppDatabase {
         ]))
       .watch();
 
+  /// Reactive single-book read for the detail screen (2.5, AC1). Emits the row,
+  /// then **null** once it is deleted — the detail screen watches for that null
+  /// to pop back to the library on Remove (Story 2.5, Task 5).
+  Stream<Book?> watchBookById(int id) =>
+      (select(books)..where((b) => b.id.equals(id))).watchSingleOrNull();
+
+  /// Reactive chapter list for a book in `chapterIndex` (reading) order — backs
+  /// the detail screen's chapter list (2.5, AC1).
+  Stream<List<Chapter>> chaptersForBook(int bookId) => (select(chapters)
+        ..where((c) => c.bookId.equals(bookId))
+        ..orderBy(<OrderingTerm Function($ChaptersTable)>[
+          (c) => OrderingTerm(expression: c.chapterIndex),
+        ]))
+      .watch();
+
   Future<int> insertBook(BooksCompanion book) => into(books).insert(book);
 
   Future<void> insertChapters(List<ChaptersCompanion> rows) =>

@@ -1,5 +1,5 @@
 # generated: 2026-06-09
-# last_updated: 2026-06-16  # story 2.4 → done: code review passed
+# last_updated: 2026-06-18  # story 2.5 → ready-for-dev (create-story): book detail + remove — BookDetailScreen (cover/metadata/placeholder-progress/chapter list; Send-to-watch + jump-to-chapter rendered inert for Epic 4), first Navigator.push nav (no router), watchBookById/chaptersForBook drift reads, LibraryService.removeBook (cascade rows + stream + cover, ui→services→data), Remove confirm-and-delete (functional), Restart confirm dialog (effect deferred to Epic 4); resolves 2.3-deferred StreamStore.delete() jsonl-surgery (document-the-accept); no schema change
 # project: garmin_RSVP
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-16  # story 2.4 → ready-for-dev (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
+last_updated: 2026-06-18  # story 2.5 → review (dev-story) (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +57,7 @@ development_status:
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
   2-3-import-txt-md-into-the-library: done
   2-4-import-epub-with-cover-and-chapters: done
-  2-5-book-detail-and-remove: backlog  # 2.4 → done (code-review) 2026-06-16: review passed; 1 High verified-false (epub_pro dedups anchors), 2 patches (dead extractCover removed, metadata surrogate strip), 4 deferred to 2.6; 266 tests green
+  2-5-book-detail-and-remove: review  # dev-story 2026-06-18: book detail + remove implemented; 4 ACs + Tasks 1-6 done; 284 tests pass, analyze clean, APK builds; resolved 2.3-deferred jsonl-surgery (document-the-accept); no schema change
   2-6-survivable-import-failures: backlog
   epic-2-retrospective: optional
 

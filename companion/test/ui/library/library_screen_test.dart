@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/data/db/database.dart';
+import 'package:paceturner_companion/ui/library/book_detail_screen.dart';
 import 'package:paceturner_companion/ui/library/library_providers.dart';
 import 'package:paceturner_companion/ui/library/library_screen.dart';
 
@@ -91,6 +92,35 @@ void main() {
     expect(find.widgetWithText(ListTile, 'Anon'), findsOneWidget);
     // "Not started" placeholder still present; no spurious empty author line.
     expect(find.text('Not started'), findsOneWidget);
+  });
+
+  testWidgets('tapping a row pushes the BookDetailScreen (AC1 navigation)',
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          libraryProvider.overrideWith((ref) => Stream<List<Book>>.value(
+                <Book>[sampleBook(id: 7, title: 'Tappable')],
+              )),
+          // The pushed detail screen reads these for book id 7.
+          bookDetailProvider(7).overrideWith(
+            (ref) => Stream.value(sampleBook(id: 7, title: 'Tappable')),
+          ),
+          chaptersProvider(7).overrideWith(
+            (ref) => Stream.value(const <Chapter>[]),
+          ),
+        ],
+        child: const MaterialApp(home: LibraryScreen()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(BookDetailScreen), findsNothing);
+
+    await tester.tap(find.widgetWithText(ListTile, 'Tappable'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BookDetailScreen), findsOneWidget);
   });
 
   testWidgets('multiple books all render', (tester) async {
