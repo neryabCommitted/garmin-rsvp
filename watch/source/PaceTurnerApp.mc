@@ -78,7 +78,13 @@ class PaceTurnerApp extends Application.AppBase {
     }
 
     function getInitialView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
-        return [new GateV2View(self), new GateV2Delegate(self)];
+        // Epic 3 entry: the RSVP render surface over the canned dev source (Story
+        // 3.2). The GateV2 spike view/delegate (GateV2View, GateV2Delegate) are
+        // git-preserved reference — left compiled, simply no longer entered. The
+        // spike's Communications lifecycle in onStart() is harmless to the playback
+        // path (no UI binding) and is left intact as run evidence. No InputDelegate
+        // here: BACK exits the initial view by default; controls are Story 3.3.
+        return [new PlaybackView()];
     }
 
     // System callback for every phone message. Uses receiveLight (O(1)
