@@ -30,7 +30,12 @@ class PlaybackView extends WatchUi.View {
     // starting point — recalibrated against dc.getWidth()/measured widths, never
     // hardcoding 454). The anchor column comes from dc.getWidth(); these offsets
     // are absolute px tuned for the 454-px fenix847mm target.
-    private const WATCH_EDGE = 28;        // AC4 margin clamp / usable-width inset
+    private const WATCH_EDGE = 28;        // guide-hairline span inset / normal margin
+    // The focal word may use a smaller inset than the guides: at the vertical center
+    // of a ROUND display the full diameter is available, so a wide word can fill more
+    // width (and thus take a larger, more legible native font) without clipping on
+    // the corners. Fit-to-width and the focal word's margin-clamp both use this.
+    private const FOCAL_EDGE = 8;         // AC4 focal-word fit/clamp inset
     private const HAIRLINE_OFFSET = 44;   // guide hairline distance above/below center
     private const GAP_HALF = 16;          // half-width of the anchor-column gap
     private const TICK_LEN = 10;          // anchor-tick length
@@ -41,7 +46,7 @@ class PlaybackView extends WatchUi.View {
     // architecture.md:305): index 0 is the largest native text face (the default
     // reading size); higher indices step DOWN. The Atkinson Hyperlegible BMFont is a
     // localized later swap behind THIS seam, its own follow-up story — not here.
-    private const RAMP_LENGTH = 3;
+    private const RAMP_LENGTH = 5;
 
     // ── timer ──
     private const TIMER_FLOOR_MS = 50;    // platform timer floor (AR13)
@@ -176,7 +181,15 @@ class PlaybackView extends WatchUi.View {
     // to drift off-anchor — never truncated/hyphenated (AC4).
     private function drawWord(dc as Graphics.Dc, rec as StreamDecoder.WordRecord,
                               anchorCol as Number, cy as Number, w as Number) as Void {
-        var font = fontFor(_fontIndex);
+        var usable = w - 2 * FOCAL_EDGE;
+        // Long-word fit-to-width (AC4 / DESIGN.md:131 "show whole"): a word wider
+        // than the available width at the base font would run off the round display.
+        // Step DOWN the font ramp to the LARGEST size whose whole-word width still
+        // fits the focal budget (best-effort: the smallest ramp font if nothing fits)
+        // — show whole at the most legible size that fits, never truncate/hyphenate.
+        // The Atkinson BMFont swap re-tunes this behind the same seam (Font decision).
+        // Normal words fit at the base font and keep it.
+        var font = fontFor(fitFontIndex(dc, rec.word, usable));
         var parts = OrpLayout.splitAtPivot(rec.word, rec.orpPivot);
         var before = parts[0];
         var pivot = parts[1];
@@ -185,22 +198,29 @@ class PlaybackView extends WatchUi.View {
         var beforeW = dc.getTextWidthInPixels(before, font);
         var pivotW = dc.getTextWidthInPixels(pivot, font);
         var afterW = dc.getTextWidthInPixels(after, font);
-        var fullW = beforeW + pivotW + afterW;
 
-        // Pivot centered on the anchor -> the whole word's left edge.
+        // Pivot centered on the anchor -> the whole word's three segment origins.
         var pivotLeftX = anchorCol - pivotW / 2;
         var beforeLeftX = pivotLeftX - beforeW;
-
-        // Long-word handling (AC4): if the whole word exceeds usable width, OR the
-        // before-segment would run past the left margin, clamp the word's left edge
-        // to the margin and let the pivot drift off-anchor. Whole word, never cut.
-        var usable = w - 2 * WATCH_EDGE;
-        var marginLeft = WATCH_EDGE + _jitterX;
-        if (OrpLayout.needsMarginClamp(fullW, usable) || beforeLeftX < marginLeft) {
-            beforeLeftX = marginLeft;
-            pivotLeftX = beforeLeftX + beforeW;
-        }
         var afterLeftX = pivotLeftX + pivotW;
+
+        // Bidirectional margin-clamp (AC4): anchoring the pivot at 35% can push a
+        // long word past EITHER margin (the pivot is often near the word's start, so
+        // the tail overruns the RIGHT edge). Shift the whole word so it sits inside
+        // [marginLeft, marginRight]; the pivot drifts off-anchor. After fit-to-width
+        // the word fits the focal budget, so it always fits between these margins and
+        // at most one side overflows — never truncate, never hyphenate.
+        var marginLeft = FOCAL_EDGE + _jitterX;
+        var marginRight = w - FOCAL_EDGE + _jitterX;
+        var shift = 0;
+        if (beforeLeftX < marginLeft) {
+            shift = marginLeft - beforeLeftX;            // overran left -> shift right
+        } else if (afterLeftX + afterW > marginRight) {
+            shift = marginRight - (afterLeftX + afterW); // overran right -> shift left
+        }
+        beforeLeftX += shift;
+        pivotLeftX += shift;
+        afterLeftX += shift;
 
         // Phantoms (AC3): previous/next words flank the focal word at the same
         // baseline in Ink-Faint, with a gap; null neighbours simply draw nothing.
@@ -236,7 +256,24 @@ class PlaybackView extends WatchUi.View {
     private function fontFor(index as Number) as Graphics.FontType {
         if (index <= 0) { return Graphics.FONT_SYSTEM_LARGE; }
         if (index == 1) { return Graphics.FONT_SYSTEM_MEDIUM; }
-        return Graphics.FONT_SYSTEM_SMALL;
+        if (index == 2) { return Graphics.FONT_SYSTEM_SMALL; }
+        if (index == 3) { return Graphics.FONT_SYSTEM_TINY; }
+        return Graphics.FONT_SYSTEM_XTINY;
+    }
+
+    // The largest ramp index at or below the base font whose WHOLE-word width fits
+    // `usable` (AC4 fit-to-width). Returns the base index for normal words (they fit
+    // immediately) and the smallest ramp font if even that overflows (best effort —
+    // never truncate). A handful of measurements, only for the focal word.
+    private function fitFontIndex(dc as Graphics.Dc, word as String, usable as Number) as Number {
+        var idx = _fontIndex;
+        while (idx < RAMP_LENGTH - 1) {
+            if (!OrpLayout.needsMarginClamp(dc.getTextWidthInPixels(word, fontFor(idx)), usable)) {
+                return idx;
+            }
+            idx += 1;
+        }
+        return idx;
     }
 
     // Bounded ±2px random walk for the whole composition (AC5 burn-in). Math.rand()
