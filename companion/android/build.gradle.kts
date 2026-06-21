@@ -1,3 +1,8 @@
+// AGP 9 deprecates BaseExtension (used below to reach the plugin `android {}`
+// blocks); it still works and the build script compiles with warnings-as-errors,
+// so suppress at file scope until the AGP-9 CommonExtension migration is done.
+@file:Suppress("DEPRECATION")
+
 allprojects {
     repositories {
         google()
@@ -40,6 +45,15 @@ subprojects {
                 // flutter_plugin_android_lifecycle requires >=36. Align plugins
                 // to the app's compileSdk (36).
                 android.compileSdkVersion(36)
+            }
+            // watch_connectivity_garmin compiles Kotlin to the 1.8 default while
+            // its Java is 17 (the inverse of the receive_sharing_intent case
+            // above) — again tripping "Inconsistent JVM-target". Pin every plugin
+            // module's Kotlin compile task to 17 so it matches its Java target.
+            tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+                compilerOptions {
+                    jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+                }
             }
         }
     }
