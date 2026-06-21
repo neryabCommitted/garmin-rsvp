@@ -1,6 +1,6 @@
 # Story 2.7 — Re-import dedup
 
-**Status:** review
+**Status:** done
 **Epic:** 2 — Phone Library & Book Conversion
 **Created:** 2026-06-21 (post-Epic-2 retro; carved out of 2.6 per deferred-work.md line 59)
 
@@ -61,3 +61,16 @@ Schema migrates v1 → v2 adding `content_hash` (nullable; pre-2.7 rows stay nul
 **Deferred:** none new. Pre-2.7 rows keep a null `content_hash` (out-of-scope backfill, per the story) — they dedup once re-imported.
 
 **Next:** code-review (the project's gate before `done`; fresh context / different LLM recommended).
+
+### Review Findings (2026-06-21)
+
+Code review: 3 adversarial layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor). **PASS** — all 5 ACs fully met, all Dev-Notes constraints honored. 0 decision-needed, 0 patch, 4 deferred, 2 dismissed.
+
+- [x] [Review][Defer] Multi-file batch share collapses results — an earlier file's duplicate notice/error is clobbered by a later file's result [companion/lib/ui/library/library_screen.dart:135-140, _handleShared:93-113] — deferred, pre-existing (the same `setState` overwrite already affected `_lastImportError` before 2.7); batch-result aggregation is outside the single-file dedup scope of this story.
+- [x] [Review][Defer] Re-import of bytes whose Books row survives but whose stream/cover file was deleted out-of-band returns `ImportDuplicate` at a now-dangling row, with no repair path [companion/lib/services/import/import_service.dart:130-133] — deferred, requires out-of-band corruption; "replace existing"/repair UX explicitly out of scope (story line 35).
+- [x] [Review][Defer] Migration test `degradeToV1` depends on `ALTER TABLE ... DROP COLUMN` (SQLite ≥ 3.35) [companion/test/data/db/migration_test.dart] — deferred, test-only portability debt; passes on the Ubuntu 24.04 / ubuntu-latest host (SQLite ≥ 3.45). Rebuild v1 via explicit DDL if an older SQLite ever enters CI.
+- [x] [Review][Defer] SHA-256 is computed synchronously over the full byte buffer on the caller thread before dispatch [companion/lib/services/import/import_service.dart:127,142] — deferred, minor UI-jank risk for large EPUBs; the spec mandates shell-side computation, and moving it into a `compute()` isolate is a future optimization with its own tradeoffs.
+
+**Dismissed (verified false positives):**
+- `_ioErrorOrDuplicate` "mislabels a genuine I/O error as a duplicate" — false positive: `insertBook` runs inside `_db.transaction()` (import_service.dart:176,281), so on any throw the row auto-rolls-back and `_rollback` deletes only the stream file. A hash match at `_ioErrorOrDuplicate` can therefore only be a concurrent/prior committed import → the book genuinely *is* in the library → `ImportDuplicate` is correct.
+- Index-creation "single point of failure" — speculative; `CREATE UNIQUE INDEX` failing silently while `addColumn` succeeds in the same `onUpgrade` is not a reachable path (drift throws on DDL failure).
