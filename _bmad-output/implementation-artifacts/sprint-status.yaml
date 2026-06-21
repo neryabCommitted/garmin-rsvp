@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-21  # story 2.6 → done (code-review: PASS + 1 patch applied [DRM-probe case/separator tolerance + regression test], 2 deferred); 315 tests pass, analyze clean  # prior: 2026-06-21 → review (dev-story): survivable import failures — failure taxonomy capstone  # prior: 2026-06-21 → in-progress (dev-story)  # prior: 2026-06-21 → ready-for-dev (create-story)  # prior: 2026-06-21 → done (code-review: PASS + 4 patches, 2 deferred)  # prior: 2026-06-18 → review (dev-story) (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
+last_updated: 2026-06-21  # epic-2 → done + epic-2-retrospective → done (retrospective): 6/6 stories, 315 tests pass; clear-to-proceed to Epic 3; carry-forward debt + prep to be cleared before 3.1 (Nerya). Doc: epic-2-retro-2026-06-21.md  # prior: story 2.6 → done (code-review: PASS + 1 patch applied [DRM-probe case/separator tolerance + regression test], 2 deferred); 315 tests pass, analyze clean  # prior: 2026-06-21 → review (dev-story): survivable import failures — failure taxonomy capstone  # prior: 2026-06-21 → in-progress (dev-story)  # prior: 2026-06-21 → ready-for-dev (create-story)  # prior: 2026-06-21 → done (code-review: PASS + 4 patches, 2 deferred)  # prior: 2026-06-18 → review (dev-story) (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -52,14 +52,15 @@ development_status:
   epic-1-retrospective: done
 
   # ── Epic 2: Phone Library & Book Conversion ──
-  epic-2: in-progress
+  epic-2: done
   2-1-text-sanitation-tokenization: done
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
   2-3-import-txt-md-into-the-library: done
   2-4-import-epub-with-cover-and-chapters: done
   2-5-book-detail-and-remove: done  # code-review 2026-06-21: PASS (Acceptance Auditor) + 4 patches applied (real bug: chapters-error masked as spinner via AsyncValue.when loading-precedence; +author Key test; +null-book pop coverage; +cover FileImage assert); 2 items deferred (removeBook UI error-surfacing, family autoDispose); 288 tests pass, analyze clean
   2-6-survivable-import-failures: done  # code-review 2026-06-21: PASS (Acceptance Auditor) + 1 patch applied (DRM-probe case/separator tolerance, epub_extractor.dart:_isEncrypted + drmEncryptedEpubVariantName regression test); 2 deferred (bake ArgumentError-masking — invariant verified correct; binary-renamed-.txt reason accuracy); 315 tests pass, analyze clean  # prior: dev-story 2026-06-21: failure-taxonomy capstone — typed pure-Dart exceptions (import_exceptions.dart), txt/md oversized-token → unsupported (not emptyContent), structural DRM via META-INF/encryption.xml (deleted brittle _classifyParseError), nested-table direct-rows fix, cover source-dimension bound + narrowed catch, ugly-EPUB synthetic corpus, inline MaterialBanner w/ canonical copy; archive promoted to deps; no schema change; analyze clean, 314 tests pass  # prior: create-story 2026-06-21: failure-taxonomy capstone — typed exceptions in pure pipeline (split empty vs unencodable-token), structural DRM detection (META-INF/encryption.xml, not message-substring), nested-table double-emit fix (html_extractor), cover-catch hardening, ugly-EPUB synthetic fixture corpus, inline library message ("Couldn't read {filename} — {reason}", EXPERIENCE.md:114); no schema change; dedup explicitly OUT (→ Story 2.7); resolves deferred-work items from 2.3/2.4
-  epic-2-retrospective: optional
+  2-7-re-import-dedup: review  # dev-story 2026-06-21: content-hash (SHA-256 of raw bytes) dedup — schema v1→v2 (+content_hash nullable + partial unique index, non-destructive migration), ImportDuplicate result arm (pre-bake short-circuit, no partial state; race re-resolved via bookByContentHash), neutral quiet-librarian notice banner; crypto→direct dep; 331 tests pass (dedup + migration + UI groups), analyze clean. Story: 2-7-re-import-dedup.md  # prior: ready-for-dev (post-retro): carved out of 2.6 (deferred-work.md line 59)
+  epic-2-retrospective: done  # retro 2026-06-21: 6/6 stories done, 315 tests pass; verdict clear-to-proceed; per Nerya, carry-forward debt + Epic 3 prep tasks to be addressed before Story 3.1. Doc: epic-2-retro-2026-06-21.md
 
   # ── Epic 3: RSVP Reading on the Wrist ──
   epic-3: backlog

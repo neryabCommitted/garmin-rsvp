@@ -167,7 +167,10 @@ class _DetailView extends ConsumerWidget {
   }
 
   /// Remove (AC3): confirm once, then delete via the service. The screen pops
-  /// itself when `bookDetailProvider` emits null after the row is gone.
+  /// itself when `bookDetailProvider` emits null after the row is gone. The
+  /// happy path is idempotent and never throws; an unexpected IO/permission
+  /// failure is surfaced as a SnackBar (the row may already be gone, so we do
+  /// not assume the screen is still mounted) rather than swallowed.
   Future<void> _confirmRemove(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -186,8 +189,17 @@ class _DetailView extends ConsumerWidget {
         ],
       ),
     );
-    if (confirmed == true) {
+    if (confirmed != true || !context.mounted) return;
+    // Capture the messenger before the removeBook await — the row removal makes
+    // `bookDetailProvider` emit null and pops this screen, so `context` may be
+    // defunct by the time the future settles.
+    final messenger = ScaffoldMessenger.of(context);
+    try {
       await ref.read(libraryServiceProvider).removeBook(book);
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not remove ${book.title}: $error')),
+      );
     }
   }
 

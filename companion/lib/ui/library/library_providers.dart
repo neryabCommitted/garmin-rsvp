@@ -35,13 +35,16 @@ final libraryProvider = StreamProvider<List<Book>>(
 );
 
 /// Reactive single book for the detail screen (2.5, AC1). Emits null once the
-/// row is removed — the detail screen pops on that null.
-final bookDetailProvider = StreamProvider.family<Book?, int>(
+/// row is removed — the detail screen pops on that null. `.autoDispose` so the
+/// per-book drift `watch()` subscription is released when the detail screen
+/// pops, rather than living for the app's lifetime per visited id.
+final bookDetailProvider = StreamProvider.autoDispose.family<Book?, int>(
   (ref, id) => ref.watch(databaseProvider).watchBookById(id),
 );
 
 /// Reactive chapter list for the detail screen (2.5, AC1), in reading order.
-final chaptersProvider = StreamProvider.family<List<Chapter>, int>(
+/// `.autoDispose` for the same reason as [bookDetailProvider].
+final chaptersProvider = StreamProvider.autoDispose.family<List<Chapter>, int>(
   (ref, id) => ref.watch(databaseProvider).chaptersForBook(id),
 );
 

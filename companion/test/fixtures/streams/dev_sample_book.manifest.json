@@ -1,0 +1,23 @@
+{
+  "ti": "The Lantern-Keeper (dev sample)",
+  "tw": 228,
+  "tb": 12772,
+  "fp": "4bd588b9",
+  "ch": [
+    {
+      "o": 0,
+      "ti": "I. The Harbor at Dusk",
+      "cb": 0
+    },
+    {
+      "o": 81,
+      "ti": "II. A Café and a Question",
+      "cb": 3734
+    },
+    {
+      "o": 170,
+      "ti": "III. What the Tide Returned",
+      "cb": 9532
+    }
+  ]
+}

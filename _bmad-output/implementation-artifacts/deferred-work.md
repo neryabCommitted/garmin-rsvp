@@ -1,5 +1,17 @@
 # Deferred Work
 
+## Epic 2 retro cleanup — pre-Epic-3 (2026-06-21)
+
+Per Nerya's direction at the Epic 2 retrospective, the cheap carry-forward debt + Epic 3 prep tasks were cleared before Story 3.1. Done:
+
+- ✅ **Theme seed → UX-DR3 `#FF5349`** — `lib/app.dart` light + dark `ColorScheme.fromSeed` now seed from the pivot red (`Color(0xFFFF5349)`) instead of `Colors.deepPurple`. (Dynamic color / Material You per DESIGN.md remains a separate UI-story enhancement; `#FF5349` is the documented *fallback* seed.)
+- ✅ **Family-provider `.autoDispose`** — see the 2.5 section below (RESOLVED).
+- ✅ **`removeBook` UI error-surfacing** — see the 2.5 section below (RESOLVED).
+- ✅ **Epic 3 dev word-stream fixture** — resolves the Epic 1 retro prep item. Committed at `companion/test/fixtures/streams/dev_sample_book.{stream,manifest.json,jsonl}` (228 words, 3 chapters, fp `4bd588b9`), baked through the real `sanitize → tokenize → bake` pipeline from original license-clean prose; `generate.dart` regenerates, `dev_sample_book_test.dart` is the drift guard. See its `README.md`.
+- ✅ **Reader-contract note create-story-ready** — the "Forward to Epic 3" note (Story 2.1 review, below) already names Stories 3-1/3-3 with the rsvpnano `shouldFinalizeReaderPause()` / `sentenceStartAtOrBefore()` anchors. No change needed; create-story will pick it up.
+
+**Left at their binding stories (premature to do now):** the Gate-V4 pacing/ASCII-fold fidelity bundle (Story 3.9 hardware recalibration) and the Epic-4 share-sheet/error-UX items. Story 2.7 (re-import dedup) is being built as its own story next.
+
 ## Deferred from: code review of 2-3-import-txt-md-into-the-library (2026-06-15)
 
 - **Share-sheet silent-drop** (`companion/lib/ui/library/library_screen.dart:104`): a delivery arriving while an import is in-flight (warm `mediaStream` event, or a second `SEND` batch) is silently dropped by `if (_importing) return;` — no SnackBar, violates the "no silent" principle. Deferred because the fix is a queue/notify *UX* decision (queue all vs. reject-with-message vs. ignore), not a mechanical patch, and the share path is manual-on-device-pending. Resolve during the share-sheet hardening / on-device verification pass. Source: Blind Hunter + Edge Case Hunter + Acceptance Auditor, Story 2.3 review.
@@ -54,8 +66,8 @@
 
 ## Deferred from: code review of story-2.5 (2026-06-21)
 
-- **Family providers not `.autoDispose`** [`companion/lib/ui/library/library_providers.dart:39-45`] — `bookDetailProvider`/`chaptersProvider` (`StreamProvider.family`) keep a live drift `watch()` subscription per visited book id for the app's lifetime. Low-risk (bounded library; mirrors the existing non-autoDispose `libraryProvider`). Revisit if the surface count grows in Epic 4.
-- **`removeBook` error not surfaced in UI** [`companion/lib/services/library/library_service.dart:37-38`; `companion/lib/ui/library/book_detail_screen.dart:155-157`] — service doc claims the UI surfaces a propagated error, but `_confirmRemove` has no `try/catch`; an unexpected IO/permission throw is uncaught after the row is already deleted. Deferred: Remove happy-path is idempotent (never throws); UI error-surfacing rides the Epic-4 error-UX pass.
+- ~~**Family providers not `.autoDispose`**~~ — **RESOLVED in Epic 2 retro cleanup (2026-06-21)**: `bookDetailProvider`/`chaptersProvider` are now `StreamProvider.autoDispose.family` (`companion/lib/ui/library/library_providers.dart`), so the per-book drift `watch()` subscription releases when the detail screen pops.
+- ~~**`removeBook` error not surfaced in UI**~~ — **RESOLVED in Epic 2 retro cleanup (2026-06-21)**: `_confirmRemove` (`companion/lib/ui/library/book_detail_screen.dart`) now captures the `ScaffoldMessenger` before the await (with a `context.mounted` guard) and surfaces a SnackBar on a `removeBook` throw instead of swallowing it. Regression test added (`book_detail_screen_test.dart` "a removeBook failure surfaces a SnackBar"). The broader Epic-4 error-UX pass still owns the *share-sheet* silent-drop / md-as-text items.
 - **Re-import dedup — PRODUCT DECISION NOW MADE (Nerya, 2026-06-21)** [`companion/lib/services/import/import_service.dart` salt @ ~:99, fingerprint @ :216-254] — the same *file* must NOT be importable twice; *different versions/editions of the same book* MUST remain importable. ⇒ dedup keyed on **raw-file-content identity** (e.g. a SHA of the source bytes computed before the `DateTime.now()`-derived stream salt), NOT on title/author (which would wrongly block different editions). Today the salt is time-derived so the same file always yields a fresh fingerprint → a duplicate `Books` row + stream + cover. Supersedes the 2.3 "decide dedup policy alongside 2.5" item (line 9) and the EPUB-section "No re-import dedup" item. **Not yet implemented** — needs its own story (touches the import pipeline + a uniqueness check/constraint; likely a small schema add for the content hash, so it is NOT a 2.6 freebie). Recommend a dedicated Story 2.7 (or fold into 2.6 only if 2.6's schema is already opening). On a duplicate, surface a quiet-librarian message ("This book is already in your library") rather than silently skipping.
 
 ## Deferred from: code review of story-2.6 (2026-06-21)

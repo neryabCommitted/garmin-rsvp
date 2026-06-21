@@ -43,6 +43,13 @@ class _SpyLibraryService implements LibraryService {
   Future<void> removeBook(Book book) async => removed.add(book);
 }
 
+/// A LibraryService whose removeBook always fails — exercises the error path.
+class _ThrowingLibraryService implements LibraryService {
+  @override
+  Future<void> removeBook(Book book) async =>
+      throw Exception('disk on fire');
+}
+
 Widget harness({
   required Book? book,
   List<Chapter> chapters = const <Chapter>[],
@@ -167,6 +174,23 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(spy.removed.single.title, 'Doomed');
+  });
+
+  testWidgets('AC3 — a removeBook failure surfaces a SnackBar (not swallowed)',
+      (tester) async {
+    await tester.pumpWidget(harness(
+      book: sampleBook(title: 'Stuck'),
+      service: _ThrowingLibraryService(),
+    ));
+    await tester.pump();
+
+    await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove').last);
+    await tester.pumpAndSettle();
+
+    // The book still shows (removal failed) and the error is surfaced, not eaten.
+    expect(find.textContaining('Could not remove Stuck'), findsOneWidget);
   });
 
   testWidgets('AC4 — Restart asks once then dismisses with no state change',

@@ -11,18 +11,23 @@ import 'ui/library/library_screen.dart';
 class PaceTurnerApp extends StatelessWidget {
   const PaceTurnerApp({super.key});
 
+  /// The pivot red (UX-DR3 / DESIGN.md:27) — the single brand chromatic,
+  /// softened from RSVPnano's pure red. On the phone it is the *fallback* scheme
+  /// seed (dynamic color / Material You is a separate UI-story enhancement).
+  static const Color _pivotSeed = Color(0xFFFF5349);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'PaceTurner',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: _pivotSeed),
       ),
       darkTheme: ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.deepPurple,
+          seedColor: _pivotSeed,
           brightness: Brightness.dark,
         ),
       ),
