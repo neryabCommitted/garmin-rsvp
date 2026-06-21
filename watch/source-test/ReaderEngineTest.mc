@@ -1,0 +1,319 @@
+import Toybox.Lang;
+import Toybox.Test;
+
+// Host-side tests for the pure reading engine + Settings model (Story 3.1,
+// AC1–AC7). Run under matco/action-connectiq-tester (SDK 8.4.0, fenix847mm) at
+// Strict level 3. Assertions are literal: a regression in the timing math,
+// drift-free accumulator, pause/rewind logic, or defaults must fail THIS build.
+// No Test.assert* API is used in this codebase — assert via conditionals +
+// logger.error(...) + return false (mirrors SmokeTest/ProtocolTest).
+module ReaderEngineTestSupport {
+
+    // A 10-word, 3-sentence book with known sentence-end indices (2, 4, 9) and
+    // bonusMs values, so pacing, coast pause, and stackable rewind are all
+    // exercisable. Word 9 is both a sentence end AND the last word of the book.
+    //   sentence 0: idx 0..2  (starts at 0)
+    //   sentence 1: idx 3..4  (starts at 3)
+    //   sentence 2: idx 5..9  (starts at 5)
+    function sampleWords() as Array<StreamDecoder.WordRecord> {
+        var se = Protocol.FLAG_SENTENCE_END;
+        var para = Protocol.FLAG_PARAGRAPH_START | Protocol.FLAG_CHAPTER_START;
+        return [
+            new StreamDecoder.WordRecord("The", para, 0, 0),
+            new StreamDecoder.WordRecord("quick", 0, 0, 0),
+            new StreamDecoder.WordRecord("fox.", se, 0, 100),
+            new StreamDecoder.WordRecord("It", 0, 0, 0),
+            new StreamDecoder.WordRecord("ran.", se, 0, 50),
+            new StreamDecoder.WordRecord("Then", 0, 0, 0),
+            new StreamDecoder.WordRecord("it", 0, 0, 0),
+            new StreamDecoder.WordRecord("slept", 0, 0, 0),
+            new StreamDecoder.WordRecord("all", 0, 0, 0),
+            new StreamDecoder.WordRecord("night.", se, 0, 200)
+        ] as Array<StreamDecoder.WordRecord>;
+    }
+
+    function newEngine() as Reader.ReaderEngine {
+        return new Reader.ReaderEngine(new FakeWordSource(sampleWords()), 250, SettingsModel.PAUSE_COAST);
+    }
+
+    // Advance the engine by exactly one beat/word, ticking precisely at its due
+    // time (elapsed == currentDuration) so no catch-up cap is involved.
+    function stepDue(engine as Reader.ReaderEngine) as Void {
+        engine.onTick(engine.lastAdvance() + engine.currentDuration());
+    }
+
+    // play() then walk the 3-beat ramp to land PLAYING on word 0, then advance to
+    // `target`.
+    function driveToPlayingIndex(engine as Reader.ReaderEngine, target as Number) as Void {
+        engine.play(0);
+        for (var i = 0; i < Reader.RAMP_BEATS; i++) {
+            stepDue(engine);
+        }
+        while (engine.index() < target && engine.isPlaying()) {
+            stepDue(engine);
+        }
+    }
+
+    // Fresh default engine driven to PLAYING on `target`.
+    function driveToPlayingIndexNew(target as Number) as Reader.ReaderEngine {
+        var engine = newEngine();
+        driveToPlayingIndex(engine, target);
+        return engine;
+    }
+}
+
+// ── AC1: Settings model with pure, Storage-independent defaults ──────────────
+
+(:test)
+function settingsDefaultsAreStorageFree(logger as Test.Logger) as Boolean {
+    // Enum-style constants must be the stable, typed values call sites depend on.
+    if (SettingsModel.PAUSE_COAST != 0) { logger.error("PAUSE_COAST"); return false; }
+    if (SettingsModel.PAUSE_INSTANT != 1) { logger.error("PAUSE_INSTANT"); return false; }
+    if (SettingsModel.HAND_RIGHT != 0) { logger.error("HAND_RIGHT"); return false; }
+    if (SettingsModel.HAND_LEFT != 1) { logger.error("HAND_LEFT"); return false; }
+
+    // Defaults are produced by the constructor with ZERO Storage access.
+    var s = new SettingsModel.Settings();
+    if (s.wpm != 250) { logger.error("default wpm"); return false; }
+    if (s.pauseMode != SettingsModel.PAUSE_COAST) { logger.error("default pauseMode"); return false; }
+    if (!s.touchControls) { logger.error("default touchControls"); return false; }
+    if (s.fontSize != 0) { logger.error("default fontSize"); return false; }
+    if (s.handedness != SettingsModel.HAND_RIGHT) { logger.error("default handedness"); return false; }
+    if (!s.focusHighlight) { logger.error("default focusHighlight"); return false; }
+    if (!s.phantomWords) { logger.error("default phantomWords"); return false; }
+    if (s.anchorPct != 35) { logger.error("default anchorPct"); return false; }
+    return true;
+}
+
+(:test)
+function settingsApplyDictIsPureAndValidated(logger as Test.Logger) as Boolean {
+    // null dict (fresh install) keeps every default.
+    var s = new SettingsModel.Settings();
+    s.applyDict(null);
+    if (s.wpm != 250 || s.anchorPct != 35) { logger.error("null dict not a no-op"); return false; }
+
+    // Valid values apply.
+    s.applyDict({
+        "wpm" => 600, "pauseMode" => 1, "touchControls" => false, "fontSize" => 2,
+        "handedness" => 1, "focusHighlight" => false, "phantomWords" => false, "anchorPct" => 50
+    });
+    if (s.wpm != 600) { logger.error("apply wpm"); return false; }
+    if (s.pauseMode != SettingsModel.PAUSE_INSTANT) { logger.error("apply pauseMode"); return false; }
+    if (s.touchControls) { logger.error("apply touchControls"); return false; }
+    if (s.fontSize != 2) { logger.error("apply fontSize"); return false; }
+    if (s.handedness != SettingsModel.HAND_LEFT) { logger.error("apply handedness"); return false; }
+    if (s.focusHighlight) { logger.error("apply focusHighlight"); return false; }
+    if (s.phantomWords) { logger.error("apply phantomWords"); return false; }
+    if (s.anchorPct != 50) { logger.error("apply anchorPct"); return false; }
+
+    // Out-of-range / malformed values degrade to the current value (NFR8/AR24).
+    var s2 = new SettingsModel.Settings();
+    s2.applyDict({
+        "wpm" => 99999, "pauseMode" => 7, "anchorPct" => -5, "fontSize" => -1, "handedness" => "left"
+    });
+    if (s2.wpm != SettingsModel.WPM_MAX) { logger.error("wpm not clamped"); return false; }
+    if (s2.pauseMode != SettingsModel.PAUSE_COAST) { logger.error("bad pauseMode not degraded"); return false; }
+    if (s2.anchorPct != 35) { logger.error("bad anchorPct not degraded"); return false; }
+    if (s2.fontSize != 0) { logger.error("negative fontSize not degraded"); return false; }
+    if (s2.handedness != SettingsModel.HAND_RIGHT) { logger.error("non-number handedness not degraded"); return false; }
+
+    // toDict round-trips through applyDict.
+    var s3 = new SettingsModel.Settings();
+    s3.applyDict(s.toDict());
+    if (s3.wpm != 600 || s3.anchorPct != 50 || s3.pauseMode != 1) { logger.error("toDict round-trip"); return false; }
+    return true;
+}
+
+// ── AC2: drift-free advance, baked timing, catch-up cap ──────────────────────
+
+(:test)
+function engineWordTimingMath(logger as Test.Logger) as Boolean {
+    // 60000/250 = 240 ms per word; bonusMs is added as-is (SPEC §5.1).
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(0); // word 0, bonus 0
+    if (engine.index() != 0 || !engine.isPlaying()) { logger.error("not playing word 0"); return false; }
+    if (engine.currentDuration() != 240) { logger.error("word0 duration != 240"); return false; }
+
+    ReaderEngineTestSupport.stepDue(engine); // word 1, bonus 0
+    if (engine.currentDuration() != 240) { logger.error("word1 duration != 240"); return false; }
+
+    ReaderEngineTestSupport.stepDue(engine); // word 2, bonus 100 -> 340
+    if (engine.index() != 2) { logger.error("not at word 2"); return false; }
+    if (engine.currentDuration() != 340) { logger.error("word2 duration != 340 (60000/250 + 100)"); return false; }
+    return true;
+}
+
+(:test)
+function engineDriftFreeAccumulator(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.play(0); // RAMP, beat = 240 ms
+    // Tick 5 ms LATE. The engine must advance one beat but set lastAdvance via
+    // += duration (240), NOT = now (245). That is the whole point of drift-free.
+    engine.onTick(245);
+    if (engine.lastAdvance() != 240) { logger.error("lastAdvance drifted to now (expected 240)"); return false; }
+    if (engine.rampRemaining() != 2) { logger.error("ramp did not advance one beat"); return false; }
+    return true;
+}
+
+(:test)
+function engineCatchUpCapFourWords(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(0);
+    var anchor = engine.lastAdvance();
+    // One tick a long way into the future must advance at MOST 4 words, then
+    // resync the accumulator so a stall does not burst through the text.
+    engine.onTick(anchor + 100000);
+    if (engine.index() != 4) { logger.error("catch-up not capped at 4 words"); return false; }
+    if (engine.lastAdvance() != anchor + 100000) { logger.error("accumulator not resynced after cap"); return false; }
+    // Normal pace resumes from here.
+    ReaderEngineTestSupport.stepDue(engine);
+    if (engine.index() != 5) { logger.error("normal pace did not resume after cap"); return false; }
+    return true;
+}
+
+// ── AC3: WPM change takes effect next word, no re-fetch, no drift ────────────
+
+(:test)
+function engineWpmChangeTakesEffectNextWordNoRefetch(logger as Test.Logger) as Boolean {
+    var source = new FakeWordSource(ReaderEngineTestSupport.sampleWords());
+    var engine = new Reader.ReaderEngine(source, 250, SettingsModel.PAUSE_COAST);
+    engine.play(0);
+    for (var i = 0; i < Reader.RAMP_BEATS; i++) { ReaderEngineTestSupport.stepDue(engine); }
+    if (engine.index() != 0 || engine.currentDuration() != 240) { logger.error("setup: word0 @ 240"); return false; }
+
+    var callsBefore = source.wordAtCalls;
+    engine.setWpm(500); // 60000/500 = 120
+    // The CURRENT word keeps its already-computed duration (effect is next word).
+    if (engine.currentDuration() != 240) { logger.error("wpm change altered current word duration"); return false; }
+    // No content re-fetch: changing WPM is pure math, it must not read the source.
+    if (source.wordAtCalls != callsBefore) { logger.error("setWpm re-fetched content"); return false; }
+
+    ReaderEngineTestSupport.stepDue(engine); // word 1, bonus 0 -> 120 at new WPM
+    if (engine.index() != 1) { logger.error("did not advance to word 1"); return false; }
+    if (engine.currentDuration() != 120) { logger.error("new WPM not applied next word"); return false; }
+    return true;
+}
+
+// ── AC4: 3-beat start ramp ───────────────────────────────────────────────────
+
+(:test)
+function engineStartRampThreeBeats(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.play(0);
+    if (!engine.isRamping() || engine.rampRemaining() != 3) { logger.error("play did not arm 3-beat ramp"); return false; }
+    ReaderEngineTestSupport.stepDue(engine);
+    if (engine.rampRemaining() != 2 || !engine.isRamping()) { logger.error("beat 1"); return false; }
+    ReaderEngineTestSupport.stepDue(engine);
+    if (engine.rampRemaining() != 1 || !engine.isRamping()) { logger.error("beat 2"); return false; }
+    ReaderEngineTestSupport.stepDue(engine);
+    if (!engine.isPlaying() || engine.index() != 0 || engine.rampRemaining() != 0) { logger.error("ramp -> word 0"); return false; }
+
+    // Resume after a pause re-arms the ramp (AC4 — on every play/resume).
+    var e2 = ReaderEngineTestSupport.newEngine();
+    e2.setPauseMode(SettingsModel.PAUSE_INSTANT);
+    ReaderEngineTestSupport.driveToPlayingIndex(e2, 1);
+    e2.requestPause();
+    if (!e2.isPaused()) { logger.error("instant pause"); return false; }
+    e2.play(100);
+    if (!e2.isRamping() || e2.rampRemaining() != 3) { logger.error("resume did not re-arm ramp"); return false; }
+    return true;
+}
+
+// ── AC5: two-stage pause (coast / instant) ───────────────────────────────────
+
+(:test)
+function engineCoastPauseStopsAtSentenceEnd(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(1); // mid sentence 0
+    engine.requestPause();
+    // Coast: still playing, not yet at a sentence end.
+    if (!engine.isPlaying()) { logger.error("coast paused immediately (should keep playing)"); return false; }
+    ReaderEngineTestSupport.stepDue(engine); // -> word 2, which ends the sentence
+    if (!engine.isPaused()) { logger.error("coast did not finalize at sentence end"); return false; }
+    if (engine.index() != 2) { logger.error("coast stopped at wrong index"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_PAUSE) { logger.error("no PAUSE transition"); return false; }
+    return true;
+}
+
+(:test)
+function engineInstantPauseStopsImmediately(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(1);
+    engine.setPauseMode(SettingsModel.PAUSE_INSTANT);
+    engine.requestPause();
+    if (!engine.isPaused()) { logger.error("instant did not pause"); return false; }
+    if (engine.index() != 1) { logger.error("instant did not stop on current word"); return false; }
+    return true;
+}
+
+(:test)
+function engineAtEndFinalizesCoastPause(logger as Test.Logger) as Boolean {
+    // Coast pause requested before the last word must finalize at the book end
+    // (endsSentence || atEnd), NOT run off into FINISHED.
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(8); // not a sentence end, not atEnd
+    engine.requestPause();
+    if (!engine.isPlaying()) { logger.error("coast paused early at word 8"); return false; }
+    ReaderEngineTestSupport.stepDue(engine); // -> word 9 (last, sentence end)
+    if (!engine.isPaused()) { logger.error("did not finalize coast pause at book end"); return false; }
+    if (engine.index() != 9) { logger.error("coast pause stopped at wrong index"); return false; }
+    if (engine.isFinished()) { logger.error("coast pause leaked into FINISHED"); return false; }
+    return true;
+}
+
+// ── AC6: stackable sentence rewind with auto-pause ───────────────────────────
+
+(:test)
+function engineRewindStackableClampAutoPause(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(7); // sentence 2 (starts at 5)
+    engine.rewind();
+    if (engine.index() != 5) { logger.error("rewind 1 -> start of current sentence (5)"); return false; }
+    if (!engine.isPaused()) { logger.error("rewind did not auto-pause"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_REWIND) { logger.error("no REWIND transition"); return false; }
+
+    engine.rewind(); // already at a sentence start -> previous sentence (starts at 3)
+    if (engine.index() != 3) { logger.error("rewind 2 -> previous sentence (3)"); return false; }
+
+    engine.rewind(); // -> sentence 0 (starts at 0)
+    if (engine.index() != 0) { logger.error("rewind 3 -> first sentence (0)"); return false; }
+
+    engine.rewind(); // clamp at start, never below 0
+    if (engine.index() != 0) { logger.error("rewind did not clamp at start"); return false; }
+    return true;
+}
+
+// ── Robustness guards (code review 2026-06-21) ───────────────────────────────
+
+(:test)
+function engineEmptyBookDoesNotPlayOrFinish(logger as Test.Logger) as Boolean {
+    // A 0-word source is not a readable book: play() must refuse to start rather
+    // than ramp into a false FINISHED (atEnd() = `_index >= count - 1` is vacuously
+    // true at count 0). No bogus TRANSITION_FINISHED for SyncManager to commit.
+    var engine = new Reader.ReaderEngine(new FakeWordSource([] as Array<StreamDecoder.WordRecord>), 250, SettingsModel.PAUSE_COAST);
+    engine.play(0);
+    if (engine.isRamping() || engine.isPlaying()) { logger.error("empty book entered a playable state"); return false; }
+    engine.onTick(100000);
+    if (engine.isFinished()) { logger.error("empty book faked a FINISHED"); return false; }
+    if (engine.state() != Reader.STATE_IDLE) { logger.error("empty book left IDLE"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_NONE) { logger.error("empty book emitted a transition"); return false; }
+    return true;
+}
+
+(:test)
+function engineRewindFromIdleIsNoOp(logger as Test.Logger) as Boolean {
+    // A never-played engine has nothing to rewind: it must NOT flip IDLE to PAUSED
+    // or emit a spurious TRANSITION_REWIND.
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.rewind();
+    if (engine.state() != Reader.STATE_IDLE) { logger.error("rewind from IDLE changed state"); return false; }
+    if (engine.index() != 0) { logger.error("rewind from IDLE moved index"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_NONE) { logger.error("rewind from IDLE emitted a transition"); return false; }
+    return true;
+}
+
+// ── Natural finish (FINISHED transition for the finished-screen, Story 3.5) ──
+
+(:test)
+function engineNaturalFinish(logger as Test.Logger) as Boolean {
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(9); // last word, playing
+    if (!engine.isPlaying() || engine.index() != 9) { logger.error("setup at last word"); return false; }
+    ReaderEngineTestSupport.stepDue(engine); // display last word elapses -> FINISHED
+    if (!engine.isFinished()) { logger.error("did not finish at book end"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_FINISHED) { logger.error("no FINISHED transition"); return false; }
+    return true;
+}
