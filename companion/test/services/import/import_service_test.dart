@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/data/db/database.dart';
@@ -380,6 +381,80 @@ void main() {
       expect((result as ImportFailure).reason, ImportFailureReason.unsupported);
       expect(await db.watchAllBooks().first, isEmpty);
       expect(await streamFileCount(), 0);
+    });
+  });
+
+  group('2.7 — re-import dedup (AC1·AC2·AC3·AC4)', () {
+    test('AC3 — content_hash is the SHA-256 of the raw bytes', () async {
+      final bytes = utf8.encode('Dedup me. This is the body.');
+      await make().importFile(path: '/x/a.txt', bytes: bytes);
+
+      final book = (await db.watchAllBooks().first).single;
+      expect(book.contentHash, sha256.convert(bytes).toString());
+    });
+
+    test('AC1 — same bytes twice → ImportDuplicate, one row, one stream pair',
+        () async {
+      final bytes = utf8.encode('The quick brown fox. Jumps over the dog.');
+      final svc = make();
+
+      final first = await svc.importFile(path: '/x/Original.txt', bytes: bytes);
+      expect(first, isA<ImportSuccess>());
+      final firstId = (first as ImportSuccess).bookId;
+      final streamsAfterFirst = await streamFileCount();
+
+      final second = await svc.importFile(path: '/x/Original.txt', bytes: bytes);
+      expect(second, isA<ImportDuplicate>());
+      expect((second as ImportDuplicate).existingBookId, firstId);
+
+      // No second row, and not a single extra stream file was written.
+      expect((await db.watchAllBooks().first).length, 1);
+      expect(await streamFileCount(), streamsAfterFirst);
+    });
+
+    test('AC1 — dedup is content-keyed: same bytes, different filename → dup',
+        () async {
+      final bytes = utf8.encode('Identical content, renamed file.');
+      final svc = make();
+      await svc.importFile(path: '/x/first-name.txt', bytes: bytes);
+
+      final second =
+          await svc.importFile(path: '/downloads/renamed.md', bytes: bytes);
+      expect(second, isA<ImportDuplicate>());
+      expect((second as ImportDuplicate).filename, 'renamed.md');
+      expect((await db.watchAllBooks().first).length, 1);
+    });
+
+    test('AC2 — different bytes (different edition) → both import', () async {
+      final svc = make();
+      final r1 = await svc.importFile(
+        path: '/x/edition-1.txt',
+        bytes: utf8.encode('Pride and Prejudice. First edition text.'),
+      );
+      final r2 = await svc.importFile(
+        path: '/x/edition-2.txt',
+        bytes: utf8.encode('Pride and Prejudice. Revised edition text!'),
+      );
+      expect(r1, isA<ImportSuccess>());
+      expect(r2, isA<ImportSuccess>());
+      expect((await db.watchAllBooks().first).length, 2);
+    });
+
+    test('AC1 — .epub re-import → ImportDuplicate, no second stream or cover',
+        () async {
+      final bytes = cleanThreeChapterEpub();
+      final svc = make();
+
+      final first = await svc.importFile(path: '/x/book.epub', bytes: bytes);
+      expect(first, isA<ImportSuccess>());
+      final streams = await streamFileCount();
+      final covers = await coverFileCount();
+
+      final second = await svc.importFile(path: '/x/book.epub', bytes: bytes);
+      expect(second, isA<ImportDuplicate>());
+      expect((await db.watchAllBooks().first).length, 1);
+      expect(await streamFileCount(), streams); // .stream + .jsonl, not doubled
+      expect(await coverFileCount(), covers); // cover not re-written
     });
   });
 }

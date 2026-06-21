@@ -37,6 +37,14 @@ class Books extends Table {
   /// Path to the flat-file word stream (`stream_store`).
   TextColumn get streamPath => text().named('stream_path')();
   TextColumn get fingerprint => text()();
+
+  /// SHA-256 (hex) of the raw imported file bytes — the content-identity key for
+  /// re-import dedup (Story 2.7). Distinct from [fingerprint], which is salted by
+  /// import time and so differs on every import of the same file. Nullable: rows
+  /// imported before schema v2 stay null and coexist under the partial unique
+  /// index (`content_hash IS NOT NULL`).
+  TextColumn get contentHash => text().named('content_hash').nullable()();
+
   IntColumn get totalWords => integer().named('total_words')();
   IntColumn get totalBonusMs => integer().named('total_bonus_ms')();
   IntColumn get createdAtEpochS => integer().named('created_at_epoch_s')();
@@ -69,7 +77,36 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.open() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  /// Non-destructive migrations (Story 2.7, AC5). v2 adds `Books.content_hash`
+  /// for re-import dedup; the partial unique index enforces content identity at
+  /// the DB level (a race backstop) while letting pre-v2 null-hash rows coexist
+  /// — books, chapters, and streams are never wiped.
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+          await _createContentHashIndex();
+        },
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.addColumn(books, books.contentHash);
+            await _createContentHashIndex();
+          }
+        },
+      );
+
+  Future<void> _createContentHashIndex() => customStatement(
+        'CREATE UNIQUE INDEX IF NOT EXISTS books_content_hash_unique '
+        'ON books (content_hash) WHERE content_hash IS NOT NULL',
+      );
+
+  /// The book whose raw-file content hash matches, or null (Story 2.7 dedup
+  /// pre-check). The partial unique index makes this at most one row.
+  Future<Book?> bookByContentHash(String hash) =>
+      (select(books)..where((b) => b.contentHash.equals(hash)))
+          .getSingleOrNull();
 
   /// Reactive list for the library (FR16-ready), newest first.
   Stream<List<Book>> watchAllBooks() => (select(books)

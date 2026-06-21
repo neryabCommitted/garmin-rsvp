@@ -42,6 +42,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   /// successful import or on dismiss.
   String? _lastImportError;
 
+  /// AC4 (Story 2.7): the quiet-librarian notice shown when a re-imported file is
+  /// already shelved. Informational — NOT an error — so it renders in a neutral
+  /// banner, held separately from [_lastImportError]. Cleared on the next import
+  /// or on dismiss.
+  String? _lastImportNotice;
+
   @override
   void initState() {
     super.initState();
@@ -124,9 +130,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     }
 
     if (!mounted) return;
-    // AC2: a failure shows an inline message; a success clears any prior one.
+    // AC2: a failure shows an inline error; Story 2.7 AC4: a duplicate shows a
+    // neutral notice; a success clears both. At most one banner shows at a time.
     setState(() {
       _lastImportError = result is ImportFailure ? _failureMessage(result) : null;
+      _lastImportNotice = result is ImportDuplicate
+          ? 'This book is already in your library.'
+          : null;
     });
   }
 
@@ -159,6 +169,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             _ImportErrorBanner(
               message: _lastImportError!,
               onDismiss: () => setState(() => _lastImportError = null),
+            ),
+          // Story 2.7 AC4: neutral duplicate notice (quiet-librarian voice).
+          if (_lastImportNotice != null)
+            _ImportNoticeBanner(
+              message: _lastImportNotice!,
+              onDismiss: () => setState(() => _lastImportNotice = null),
             ),
           Expanded(
             child: library.when(
@@ -205,6 +221,36 @@ class _ImportErrorBanner extends StatelessWidget {
       content: Text(
         message,
         style: TextStyle(color: scheme.onErrorContainer),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: onDismiss,
+          child: const Text('Dismiss'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Story 2.7 AC4 — neutral duplicate-import notice. Same inline `MaterialBanner`
+/// shape as [_ImportErrorBanner] but in the surface/secondary color role (not
+/// the error role): a re-import of an already-shelved file is information, not a
+/// failure.
+class _ImportNoticeBanner extends StatelessWidget {
+  const _ImportNoticeBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return MaterialBanner(
+      backgroundColor: scheme.secondaryContainer,
+      leading: Icon(Icons.info_outline, color: scheme.onSecondaryContainer),
+      content: Text(
+        message,
+        style: TextStyle(color: scheme.onSecondaryContainer),
       ),
       actions: <Widget>[
         TextButton(

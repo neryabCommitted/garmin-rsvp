@@ -244,6 +244,35 @@ void main() {
 
       expect(find.byType(MaterialBanner), findsNothing);
     });
+
+    testWidgets('2.7 AC4 — a duplicate import shows the quiet-librarian notice',
+        (tester) async {
+      importer.result = const ImportDuplicate(3, 'already.epub');
+      await tester.pumpWidget(importHarness());
+      await tester.pump();
+      await shareSomething(tester);
+
+      // Neutral inline notice, not the error banner.
+      expect(find.text('This book is already in your library.'), findsOneWidget);
+      expect(find.byType(MaterialBanner), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      // Quiet librarian — no failure/error voice anywhere.
+      expect(find.textContaining("Couldn't read"), findsNothing);
+    });
+
+    testWidgets('2.7 — a later success clears the duplicate notice',
+        (tester) async {
+      importer.result = const ImportDuplicate(3, 'already.txt');
+      await tester.pumpWidget(importHarness());
+      await tester.pump();
+      await shareSomething(tester);
+      expect(find.byType(MaterialBanner), findsOneWidget);
+
+      importer.result = const ImportSuccess(9);
+      await shareSomething(tester);
+
+      expect(find.byType(MaterialBanner), findsNothing);
+    });
   });
 }
 

@@ -88,6 +88,11 @@ dependencies:
   # already present transitively via epub_pro (depend_on_referenced_packages).
   archive: ^4.0.9
 
+  # Re-import dedup (Story 2.7): SHA-256 of the raw source bytes is the
+  # content-identity key (Books.content_hash). Pure Dart (isolate-safe); the
+  # hash is computed in the impure shell before dispatch, not in the pipeline.
+  crypto: ^3.0.6
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

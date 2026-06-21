@@ -21,6 +21,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart' show compute;
 
@@ -48,6 +49,15 @@ final class ImportSuccess extends ImportResult {
 final class ImportFailure extends ImportResult {
   const ImportFailure(this.reason, this.filename);
   final ImportFailureReason reason;
+  final String filename;
+}
+
+/// The file's bytes are already in the library (Story 2.7 dedup). NOT an
+/// [ImportFailure] — nothing went wrong; the librarian just already has this
+/// exact file. Carries the [existingBookId] so the UI could surface/route to it.
+final class ImportDuplicate extends ImportResult {
+  const ImportDuplicate(this.existingBookId, this.filename);
+  final int existingBookId;
   final String filename;
 }
 
@@ -100,20 +110,42 @@ class ImportService {
       DateTime.now().millisecondsSinceEpoch & 0x7fffffff;
 
   /// Imports one file: bake off the UI thread, then persist stream + drift rows.
-  /// Returns [ImportSuccess] or a typed [ImportFailure] — never throws (AC7).
-  /// Dispatches `.epub` to [_importEpub]; everything else takes the txt/md path.
+  /// Returns [ImportSuccess], [ImportDuplicate], or a typed [ImportFailure] —
+  /// never throws (AC7). Dispatches `.epub` to [_importEpub]; everything else
+  /// takes the txt/md path.
+  ///
+  /// Re-import dedup (Story 2.7): a SHA-256 of the raw [bytes] is the content
+  /// identity. It is computed **before** the time-derived stream salt and checked
+  /// against the library; an exact match short-circuits to [ImportDuplicate]
+  /// before anything is baked or written (no partial state). The same hash is
+  /// persisted on the new row so future re-imports dedup too.
   Future<ImportResult> importFile({
     required String path,
     required List<int> bytes,
   }) async {
     final filename = _basename(path);
-    if (_isEpub(filename)) {
-      return _importEpub(filename, bytes);
+    final contentHash = _contentHash(bytes);
+
+    // Pre-check: an exact-bytes match is already shelved — stop before baking.
+    final existing = await _db.bookByContentHash(contentHash);
+    if (existing != null) {
+      return ImportDuplicate(existing.id, filename);
     }
-    return _importText(filename, bytes);
+
+    if (_isEpub(filename)) {
+      return _importEpub(filename, bytes, contentHash);
+    }
+    return _importText(filename, bytes, contentHash);
   }
 
-  Future<ImportResult> _importText(String filename, List<int> bytes) async {
+  /// SHA-256 (lowercase hex) of the raw source bytes — the dedup identity key.
+  static String _contentHash(List<int> bytes) => sha256.convert(bytes).toString();
+
+  Future<ImportResult> _importText(
+    String filename,
+    List<int> bytes,
+    String contentHash,
+  ) async {
     final title = _stripExtension(filename);
     final isMarkdown = _isMarkdown(filename);
 
@@ -149,6 +181,7 @@ class ImportService {
           coverPath: const Value<String?>(null),
           streamPath: Value(streamPath),
           fingerprint: Value(manifest.fingerprint),
+          contentHash: Value(contentHash),
           totalWords: Value(manifest.totalWords),
           totalBonusMs: Value(manifest.totalBonusMs),
           createdAtEpochS: Value(_nowEpochS()),
@@ -179,10 +212,11 @@ class ImportService {
       await _rollback(stored);
       return ImportFailure(ImportFailureReason.unsupported, filename);
     } catch (_) {
-      // I/O or drift error — roll back any stream already written. Every other
-      // failure is ioError. No silent catch (architecture.md:293).
+      // I/O or drift error — roll back any stream already written. A lost dedup
+      // race (the partial unique index rejected a concurrent duplicate insert)
+      // surfaces here too; re-resolve it to ImportDuplicate rather than ioError.
       await _rollback(stored);
-      return ImportFailure(ImportFailureReason.ioError, filename);
+      return _ioErrorOrDuplicate(filename, contentHash);
     }
   }
 
@@ -191,7 +225,11 @@ class ImportService {
   /// one Chapters row per manifest chapter). Never throws — every failure maps
   /// to a typed [ImportFailure], rolling back the stream AND cover together
   /// (AC5 no-partial-state).
-  Future<ImportResult> _importEpub(String filename, List<int> bytes) async {
+  Future<ImportResult> _importEpub(
+    String filename,
+    List<int> bytes,
+    String contentHash,
+  ) async {
     // Parse + bake in the isolate. The EPUB is a ZIP — NEVER utf8.decode it.
     final EpubBaked epubBaked;
     try {
@@ -247,6 +285,7 @@ class ImportService {
           coverPath: Value<String?>(coverPath),
           streamPath: Value(streamPath),
           fingerprint: Value(manifest.fingerprint),
+          contentHash: Value(contentHash),
           totalWords: Value(manifest.totalWords),
           totalBonusMs: Value(manifest.totalBonusMs),
           createdAtEpochS: Value(_nowEpochS()),
@@ -267,9 +306,25 @@ class ImportService {
 
       return ImportSuccess(bookId);
     } catch (_) {
+      // I/O-class failure; roll back stream + cover. A lost dedup race re-resolves
+      // to ImportDuplicate rather than ioError (see [_importText]).
       await _rollbackEpub(stored, coverPath);
-      return ImportFailure(ImportFailureReason.ioError, filename);
+      return _ioErrorOrDuplicate(filename, contentHash);
     }
+  }
+
+  /// Disambiguates a post-insert failure: if a row with [contentHash] now exists,
+  /// a concurrent import won the race (the partial unique index rejected ours) —
+  /// report [ImportDuplicate]; otherwise it was a genuine I/O/drift error.
+  Future<ImportResult> _ioErrorOrDuplicate(
+    String filename,
+    String contentHash,
+  ) async {
+    final raced = await _db.bookByContentHash(contentHash);
+    if (raced != null) {
+      return ImportDuplicate(raced.id, filename);
+    }
+    return ImportFailure(ImportFailureReason.ioError, filename);
   }
 
   Future<void> _rollback(StoredStream? stored) async {

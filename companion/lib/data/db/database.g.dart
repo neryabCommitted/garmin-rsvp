@@ -72,6 +72,17 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _contentHashMeta = const VerificationMeta(
+    'contentHash',
+  );
+  @override
+  late final GeneratedColumn<String> contentHash = GeneratedColumn<String>(
+    'content_hash',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _totalWordsMeta = const VerificationMeta(
     'totalWords',
   );
@@ -124,6 +135,7 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
     coverPath,
     streamPath,
     fingerprint,
+    contentHash,
     totalWords,
     totalBonusMs,
     createdAtEpochS,
@@ -182,6 +194,15 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
       );
     } else if (isInserting) {
       context.missing(_fingerprintMeta);
+    }
+    if (data.containsKey('content_hash')) {
+      context.handle(
+        _contentHashMeta,
+        contentHash.isAcceptableOrUnknown(
+          data['content_hash']!,
+          _contentHashMeta,
+        ),
+      );
     }
     if (data.containsKey('total_words')) {
       context.handle(
@@ -255,6 +276,10 @@ class $BooksTable extends Books with TableInfo<$BooksTable, Book> {
         DriftSqlType.string,
         data['${effectivePrefix}fingerprint'],
       )!,
+      contentHash: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}content_hash'],
+      ),
       totalWords: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}total_words'],
@@ -293,6 +318,13 @@ class Book extends DataClass implements Insertable<Book> {
   /// Path to the flat-file word stream (`stream_store`).
   final String streamPath;
   final String fingerprint;
+
+  /// SHA-256 (hex) of the raw imported file bytes — the content-identity key for
+  /// re-import dedup (Story 2.7). Distinct from [fingerprint], which is salted by
+  /// import time and so differs on every import of the same file. Nullable: rows
+  /// imported before schema v2 stay null and coexist under the partial unique
+  /// index (`content_hash IS NOT NULL`).
+  final String? contentHash;
   final int totalWords;
   final int totalBonusMs;
   final int createdAtEpochS;
@@ -306,6 +338,7 @@ class Book extends DataClass implements Insertable<Book> {
     this.coverPath,
     required this.streamPath,
     required this.fingerprint,
+    this.contentHash,
     required this.totalWords,
     required this.totalBonusMs,
     required this.createdAtEpochS,
@@ -324,6 +357,9 @@ class Book extends DataClass implements Insertable<Book> {
     }
     map['stream_path'] = Variable<String>(streamPath);
     map['fingerprint'] = Variable<String>(fingerprint);
+    if (!nullToAbsent || contentHash != null) {
+      map['content_hash'] = Variable<String>(contentHash);
+    }
     map['total_words'] = Variable<int>(totalWords);
     map['total_bonus_ms'] = Variable<int>(totalBonusMs);
     map['created_at_epoch_s'] = Variable<int>(createdAtEpochS);
@@ -345,6 +381,9 @@ class Book extends DataClass implements Insertable<Book> {
           : Value(coverPath),
       streamPath: Value(streamPath),
       fingerprint: Value(fingerprint),
+      contentHash: contentHash == null && nullToAbsent
+          ? const Value.absent()
+          : Value(contentHash),
       totalWords: Value(totalWords),
       totalBonusMs: Value(totalBonusMs),
       createdAtEpochS: Value(createdAtEpochS),
@@ -366,6 +405,7 @@ class Book extends DataClass implements Insertable<Book> {
       coverPath: serializer.fromJson<String?>(json['coverPath']),
       streamPath: serializer.fromJson<String>(json['streamPath']),
       fingerprint: serializer.fromJson<String>(json['fingerprint']),
+      contentHash: serializer.fromJson<String?>(json['contentHash']),
       totalWords: serializer.fromJson<int>(json['totalWords']),
       totalBonusMs: serializer.fromJson<int>(json['totalBonusMs']),
       createdAtEpochS: serializer.fromJson<int>(json['createdAtEpochS']),
@@ -382,6 +422,7 @@ class Book extends DataClass implements Insertable<Book> {
       'coverPath': serializer.toJson<String?>(coverPath),
       'streamPath': serializer.toJson<String>(streamPath),
       'fingerprint': serializer.toJson<String>(fingerprint),
+      'contentHash': serializer.toJson<String?>(contentHash),
       'totalWords': serializer.toJson<int>(totalWords),
       'totalBonusMs': serializer.toJson<int>(totalBonusMs),
       'createdAtEpochS': serializer.toJson<int>(createdAtEpochS),
@@ -396,6 +437,7 @@ class Book extends DataClass implements Insertable<Book> {
     Value<String?> coverPath = const Value.absent(),
     String? streamPath,
     String? fingerprint,
+    Value<String?> contentHash = const Value.absent(),
     int? totalWords,
     int? totalBonusMs,
     int? createdAtEpochS,
@@ -407,6 +449,7 @@ class Book extends DataClass implements Insertable<Book> {
     coverPath: coverPath.present ? coverPath.value : this.coverPath,
     streamPath: streamPath ?? this.streamPath,
     fingerprint: fingerprint ?? this.fingerprint,
+    contentHash: contentHash.present ? contentHash.value : this.contentHash,
     totalWords: totalWords ?? this.totalWords,
     totalBonusMs: totalBonusMs ?? this.totalBonusMs,
     createdAtEpochS: createdAtEpochS ?? this.createdAtEpochS,
@@ -426,6 +469,9 @@ class Book extends DataClass implements Insertable<Book> {
       fingerprint: data.fingerprint.present
           ? data.fingerprint.value
           : this.fingerprint,
+      contentHash: data.contentHash.present
+          ? data.contentHash.value
+          : this.contentHash,
       totalWords: data.totalWords.present
           ? data.totalWords.value
           : this.totalWords,
@@ -450,6 +496,7 @@ class Book extends DataClass implements Insertable<Book> {
           ..write('coverPath: $coverPath, ')
           ..write('streamPath: $streamPath, ')
           ..write('fingerprint: $fingerprint, ')
+          ..write('contentHash: $contentHash, ')
           ..write('totalWords: $totalWords, ')
           ..write('totalBonusMs: $totalBonusMs, ')
           ..write('createdAtEpochS: $createdAtEpochS, ')
@@ -466,6 +513,7 @@ class Book extends DataClass implements Insertable<Book> {
     coverPath,
     streamPath,
     fingerprint,
+    contentHash,
     totalWords,
     totalBonusMs,
     createdAtEpochS,
@@ -481,6 +529,7 @@ class Book extends DataClass implements Insertable<Book> {
           other.coverPath == this.coverPath &&
           other.streamPath == this.streamPath &&
           other.fingerprint == this.fingerprint &&
+          other.contentHash == this.contentHash &&
           other.totalWords == this.totalWords &&
           other.totalBonusMs == this.totalBonusMs &&
           other.createdAtEpochS == this.createdAtEpochS &&
@@ -494,6 +543,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
   final Value<String?> coverPath;
   final Value<String> streamPath;
   final Value<String> fingerprint;
+  final Value<String?> contentHash;
   final Value<int> totalWords;
   final Value<int> totalBonusMs;
   final Value<int> createdAtEpochS;
@@ -505,6 +555,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     this.coverPath = const Value.absent(),
     this.streamPath = const Value.absent(),
     this.fingerprint = const Value.absent(),
+    this.contentHash = const Value.absent(),
     this.totalWords = const Value.absent(),
     this.totalBonusMs = const Value.absent(),
     this.createdAtEpochS = const Value.absent(),
@@ -517,6 +568,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     this.coverPath = const Value.absent(),
     required String streamPath,
     required String fingerprint,
+    this.contentHash = const Value.absent(),
     required int totalWords,
     required int totalBonusMs,
     required int createdAtEpochS,
@@ -534,6 +586,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     Expression<String>? coverPath,
     Expression<String>? streamPath,
     Expression<String>? fingerprint,
+    Expression<String>? contentHash,
     Expression<int>? totalWords,
     Expression<int>? totalBonusMs,
     Expression<int>? createdAtEpochS,
@@ -546,6 +599,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
       if (coverPath != null) 'cover_path': coverPath,
       if (streamPath != null) 'stream_path': streamPath,
       if (fingerprint != null) 'fingerprint': fingerprint,
+      if (contentHash != null) 'content_hash': contentHash,
       if (totalWords != null) 'total_words': totalWords,
       if (totalBonusMs != null) 'total_bonus_ms': totalBonusMs,
       if (createdAtEpochS != null) 'created_at_epoch_s': createdAtEpochS,
@@ -560,6 +614,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
     Value<String?>? coverPath,
     Value<String>? streamPath,
     Value<String>? fingerprint,
+    Value<String?>? contentHash,
     Value<int>? totalWords,
     Value<int>? totalBonusMs,
     Value<int>? createdAtEpochS,
@@ -572,6 +627,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
       coverPath: coverPath ?? this.coverPath,
       streamPath: streamPath ?? this.streamPath,
       fingerprint: fingerprint ?? this.fingerprint,
+      contentHash: contentHash ?? this.contentHash,
       totalWords: totalWords ?? this.totalWords,
       totalBonusMs: totalBonusMs ?? this.totalBonusMs,
       createdAtEpochS: createdAtEpochS ?? this.createdAtEpochS,
@@ -600,6 +656,9 @@ class BooksCompanion extends UpdateCompanion<Book> {
     if (fingerprint.present) {
       map['fingerprint'] = Variable<String>(fingerprint.value);
     }
+    if (contentHash.present) {
+      map['content_hash'] = Variable<String>(contentHash.value);
+    }
     if (totalWords.present) {
       map['total_words'] = Variable<int>(totalWords.value);
     }
@@ -624,6 +683,7 @@ class BooksCompanion extends UpdateCompanion<Book> {
           ..write('coverPath: $coverPath, ')
           ..write('streamPath: $streamPath, ')
           ..write('fingerprint: $fingerprint, ')
+          ..write('contentHash: $contentHash, ')
           ..write('totalWords: $totalWords, ')
           ..write('totalBonusMs: $totalBonusMs, ')
           ..write('createdAtEpochS: $createdAtEpochS, ')
@@ -1071,6 +1131,7 @@ typedef $$BooksTableCreateCompanionBuilder =
       Value<String?> coverPath,
       required String streamPath,
       required String fingerprint,
+      Value<String?> contentHash,
       required int totalWords,
       required int totalBonusMs,
       required int createdAtEpochS,
@@ -1084,6 +1145,7 @@ typedef $$BooksTableUpdateCompanionBuilder =
       Value<String?> coverPath,
       Value<String> streamPath,
       Value<String> fingerprint,
+      Value<String?> contentHash,
       Value<int> totalWords,
       Value<int> totalBonusMs,
       Value<int> createdAtEpochS,
@@ -1149,6 +1211,11 @@ class $$BooksTableFilterComposer extends Composer<_$AppDatabase, $BooksTable> {
 
   ColumnFilters<String> get fingerprint => $composableBuilder(
     column: $table.fingerprint,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get contentHash => $composableBuilder(
+    column: $table.contentHash,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1237,6 +1304,11 @@ class $$BooksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get contentHash => $composableBuilder(
+    column: $table.contentHash,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get totalWords => $composableBuilder(
     column: $table.totalWords,
     builder: (column) => ColumnOrderings(column),
@@ -1286,6 +1358,11 @@ class $$BooksTableAnnotationComposer
 
   GeneratedColumn<String> get fingerprint => $composableBuilder(
     column: $table.fingerprint,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get contentHash => $composableBuilder(
+    column: $table.contentHash,
     builder: (column) => column,
   );
 
@@ -1369,6 +1446,7 @@ class $$BooksTableTableManager
                 Value<String?> coverPath = const Value.absent(),
                 Value<String> streamPath = const Value.absent(),
                 Value<String> fingerprint = const Value.absent(),
+                Value<String?> contentHash = const Value.absent(),
                 Value<int> totalWords = const Value.absent(),
                 Value<int> totalBonusMs = const Value.absent(),
                 Value<int> createdAtEpochS = const Value.absent(),
@@ -1380,6 +1458,7 @@ class $$BooksTableTableManager
                 coverPath: coverPath,
                 streamPath: streamPath,
                 fingerprint: fingerprint,
+                contentHash: contentHash,
                 totalWords: totalWords,
                 totalBonusMs: totalBonusMs,
                 createdAtEpochS: createdAtEpochS,
@@ -1393,6 +1472,7 @@ class $$BooksTableTableManager
                 Value<String?> coverPath = const Value.absent(),
                 required String streamPath,
                 required String fingerprint,
+                Value<String?> contentHash = const Value.absent(),
                 required int totalWords,
                 required int totalBonusMs,
                 required int createdAtEpochS,
@@ -1404,6 +1484,7 @@ class $$BooksTableTableManager
                 coverPath: coverPath,
                 streamPath: streamPath,
                 fingerprint: fingerprint,
+                contentHash: contentHash,
                 totalWords: totalWords,
                 totalBonusMs: totalBonusMs,
                 createdAtEpochS: createdAtEpochS,
