@@ -19,8 +19,23 @@ import 'package:image/image.dart' as img;
 /// Longest-side cap for the stored cover, to bound the on-disk thumbnail size.
 const int kMaxCoverDimension = 600;
 
+/// Hard ceiling on a *source* cover's dimensions (Story 2.6, Task 4). A decoded
+/// cover larger than this on either axis is rejected by [coverWithinBounds] →
+/// degraded to no-cover, so the subsequent `copyResize` + `encodeJpg` never
+/// allocate buffers for a pathologically large image (the OOM risk flagged in
+/// deferred-work 2.4, line 52). Generous vs. any real cover (already capped to
+/// [kMaxCoverDimension] on output); only the absurd outliers trip it.
+const int kMaxCoverSourceDimension = 5000;
+
 /// JPEG quality for the re-encoded cover.
 const int _coverJpegQuality = 80;
+
+/// True when [image] is small enough to safely re-encode. The caller degrades a
+/// `false` to the no-cover state (AC2 valid state) instead of crashing — see
+/// [kMaxCoverSourceDimension].
+bool coverWithinBounds(img.Image image) =>
+    image.width <= kMaxCoverSourceDimension &&
+    image.height <= kMaxCoverSourceDimension;
 
 /// Downscales and re-encodes a decoded cover [image] to bounded JPEG bytes.
 /// Encodes a cover read via the lazy `EpubBookRef.readCover()` path; the

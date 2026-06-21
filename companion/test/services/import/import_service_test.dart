@@ -5,6 +5,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/data/db/database.dart';
 import 'package:paceturner_companion/data/stream_store.dart';
+import 'package:paceturner_companion/protocol/stream_codec.dart';
 import 'package:paceturner_companion/services/import/import_service.dart';
 import 'package:paceturner_companion/services/import/pipeline.dart';
 
@@ -46,6 +47,13 @@ void main() {
     final dir = Directory('${tempDir.path}${Platform.pathSeparator}covers');
     if (!await dir.exists()) return 0;
     return dir.listSync().whereType<File>().length;
+  }
+
+  /// Decodes the on-disk word stream back to its words, so a test can assert
+  /// the baked prose carries no mid-sentence pollution (AC3).
+  Future<List<String>> bakedWords(Book book) async {
+    final bytes = await File(book.streamPath).readAsBytes();
+    return decodeChunk(bytes, book.totalWords).map((r) => r.word).toList();
   }
 
   test('small .txt → ImportSuccess with one Books row and one Chapters row',
@@ -238,6 +246,140 @@ void main() {
       expect((result as ImportFailure).reason, ImportFailureReason.ioError);
       expect(await streamFileCount(), 0);
       expect(await coverFileCount(), 0);
+    });
+  });
+
+  group('2.6 — survivable failures (ugly-EPUB corpus, AC1·AC2·AC3)', () {
+    test('DRM/encrypted EPUB → unsupported, no partial state', () async {
+      final result = await make().importFile(
+        path: '/x/locked.epub',
+        bytes: drmEncryptedEpub(),
+      );
+      expect((result as ImportFailure).reason, ImportFailureReason.unsupported);
+      expect(result.filename, 'locked.epub');
+      expect(await db.watchAllBooks().first, isEmpty);
+      expect(await streamFileCount(), 0);
+      expect(await coverFileCount(), 0);
+    });
+
+    test('oversized-token EPUB → unsupported (NOT emptyContent), no partial state',
+        () async {
+      final result = await make().importFile(
+        path: '/x/huge.epub',
+        bytes: oversizedTokenEpub(),
+      );
+      expect((result as ImportFailure).reason, ImportFailureReason.unsupported);
+      expect(await db.watchAllBooks().first, isEmpty);
+      expect(await streamFileCount(), 0);
+      expect(await coverFileCount(), 0);
+    });
+
+    test('truncated zip → unreadable, no partial state', () async {
+      final result = await make().importFile(
+        path: '/x/cut.epub',
+        bytes: truncatedZipBytes(),
+      );
+      expect((result as ImportFailure).reason, ImportFailureReason.unreadable);
+      expect(await db.watchAllBooks().first, isEmpty);
+      expect(await streamFileCount(), 0);
+    });
+
+    test('valid zip but not an EPUB → unreadable, no partial state', () async {
+      final result = await make().importFile(
+        path: '/x/notabook.epub',
+        bytes: zipButNotEpubBytes(),
+      );
+      expect((result as ImportFailure).reason, ImportFailureReason.unreadable);
+      expect(await db.watchAllBooks().first, isEmpty);
+      expect(await streamFileCount(), 0);
+    });
+
+    test('corrupt cover → success, degraded to no-cover, no cover file left',
+        () async {
+      final result = await make().importFile(
+        path: '/x/badcover.epub',
+        bytes: corruptCoverEpub(),
+      );
+      expect(result, isA<ImportSuccess>());
+
+      final book = (await db.watchAllBooks().first).single;
+      expect(book.coverPath, isNull);
+      expect(await coverFileCount(), 0); // no partial cover file
+      expect(await streamFileCount(), 2); // .stream + .jsonl, book is fine
+    });
+
+    test('weird-but-valid metadata (emoji + accents) → success, preserved',
+        () async {
+      final result = await make().importFile(
+        path: '/x/weird.epub',
+        bytes: weirdMetadataEpub(),
+      );
+      expect(result, isA<ImportSuccess>());
+
+      final book = (await db.watchAllBooks().first).single;
+      expect(book.title, contains('😀'));
+      expect(book.author, contains('🎉'));
+    });
+
+    test('nested table → success, each cell once (no mid-sentence pollution)',
+        () async {
+      final result = await make().importFile(
+        path: '/x/nested.epub',
+        bytes: nestedTableEpub(),
+      );
+      expect(result, isA<ImportSuccess>());
+
+      final book = (await db.watchAllBooks().first).single;
+      final words = await bakedWords(book);
+      // The descendant-tr double-emit would duplicate the inner cell's prose.
+      for (final cell in const <String>[
+        'Outeralpha',
+        'Outerbeta',
+        'Beforenest',
+        'Innerword',
+        'afternest',
+      ]) {
+        expect(words.where((w) => w == cell).length, 1,
+            reason: '"$cell" must appear exactly once');
+      }
+    });
+
+    test('dense pre-filter → success, noise dropped, prose kept', () async {
+      final result = await make().importFile(
+        path: '/x/dense.epub',
+        bytes: denseFilterEpub(),
+      );
+      expect(result, isA<ImportSuccess>());
+
+      final book = (await db.watchAllBooks().first).single;
+      final words = await bakedWords(book);
+      final joined = words.join(' ');
+      for (final drop in const <String>[
+        'headingaltdrop',
+        'notedropone',
+        'notedroptwo',
+        'notedropthree',
+        'rubydropa',
+        'rubydropb',
+      ]) {
+        expect(joined.contains(drop), isFalse, reason: '"$drop" must be dropped');
+      }
+      expect(words, contains('Headingkeep'));
+      expect(words, contains('midprose'));
+      expect(words.any((w) => w.contains('kept')), isTrue);
+      expect(words.any((w) => w.contains('endprose')), isTrue);
+    });
+
+    test('txt with a single >255-byte token → unsupported (NOT emptyContent)',
+        () async {
+      // The specific 2.3-deferred mislabel: a clearly non-empty file.
+      final result = await make().importFile(
+        path: '/x/longword.txt',
+        bytes: utf8.encode('a' * 300),
+      );
+      expect((result as ImportFailure).reason, ImportFailureReason.unsupported);
+      expect(await db.watchAllBooks().first, isEmpty);
+      expect(await streamFileCount(), 0);
     });
   });
 }

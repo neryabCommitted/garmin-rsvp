@@ -82,6 +82,12 @@ dependencies:
   # transitively (depend_on_referenced_packages).
   meta: ^1.15.0
 
+  # OCF zip inspection (Story 2.6, Task 2): epub_extractor probes the container
+  # for META-INF/encryption.xml to detect DRM **structurally** rather than by
+  # substring-matching epub_pro's error text. Promoted from dev_dependencies —
+  # already present transitively via epub_pro (depend_on_referenced_packages).
+  archive: ^4.0.9
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -95,10 +101,6 @@ dev_dependencies:
   # drift code generation (Story 2.3) — generates database.g.dart.
   drift_dev: ^2.34.0
   build_runner: ^2.15.0
-
-  # Synthetic EPUB test-fixture builder (Story 2.4, Task 1) assembles OCF zips
-  # in memory via ZipEncoder. Test-only (epub_pro's own transitive dep).
-  archive: ^4.0.9
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

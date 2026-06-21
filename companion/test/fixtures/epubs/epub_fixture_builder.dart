@@ -46,11 +46,18 @@ class FixtureChapter {
 /// - [chapters] → one xhtml file + NCX navPoint + spine itemref each. An empty
 ///   list yields an empty spine and empty navMap (the AC5 empty-spine fixture).
 /// - [withCover] embeds a tiny PNG and the `<meta name="cover">` wiring.
+/// - [withEncryption] adds an OCF `META-INF/encryption.xml` so the importer's
+///   structural DRM probe (Story 2.6, Task 2) classifies it `unsupported`.
+/// - [coverPngBytes] overrides the embedded cover bytes (e.g. corrupt bytes to
+///   exercise the cover degrade-to-no-cover path); ignored unless [withCover].
 Uint8List buildEpub({
   required String? title,
   required String? author,
   required List<FixtureChapter> chapters,
   bool withCover = true,
+  bool withEncryption = false,
+  String encryptionEntryName = 'META-INF/encryption.xml',
+  Uint8List? coverPngBytes,
 }) {
   final archive = Archive();
 
@@ -59,6 +66,9 @@ Uint8List buildEpub({
   archive.add(ArchiveFile.noCompress('mimetype', mimetype.length, mimetype));
 
   _addString(archive, 'META-INF/container.xml', _containerXml());
+  if (withEncryption) {
+    _addString(archive, encryptionEntryName, _encryptionXml());
+  }
 
   for (var i = 0; i < chapters.length; i++) {
     _addString(
@@ -69,7 +79,7 @@ Uint8List buildEpub({
   }
 
   if (withCover) {
-    _addBytes(archive, 'OEBPS/cover.png', _coverPng());
+    _addBytes(archive, 'OEBPS/cover.png', coverPngBytes ?? _coverPng());
   }
 
   _addString(archive, 'OEBPS/toc.ncx', _ncxXml(title ?? 'Untitled', chapters));
@@ -171,7 +181,164 @@ Uint8List emptySpineEpub() =>
 Uint8List corruptEpubBytes() =>
     Uint8List.fromList(<int>[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0xFF, 0xFE]);
 
+// ── Story 2.6 ugly-EPUB corpus (Task 5) — synthetic only ──────────────────────
+
+/// A structurally valid OCF that **also** carries `META-INF/encryption.xml`
+/// (DRM/encrypted). The Task 2 structural probe must classify this `unsupported`
+/// regardless of `epub_pro`'s parse-error text.
+Uint8List drmEncryptedEpub() => buildEpub(
+      title: 'Locked Book',
+      author: 'Rights Holder',
+      withCover: false,
+      withEncryption: true,
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Sealed',
+          bodyHtml: '<p>This prose is notionally behind DRM.</p>',
+        ),
+      ],
+    );
+
+/// Like [drmEncryptedEpub] but the encryption manifest is stored at a
+/// **non-conformant** entry name — wrong casing + a backslash separator
+/// (`META-INF\Encryption.XML`), as some real-world re-zippers emit. OCF mandates
+/// the exact lowercase/forward-slash path, but the structural probe normalizes
+/// before comparing (R6), so this must still classify `unsupported`, not
+/// `unreadable` (code-review 2026-06-21, epub_extractor.dart:_isEncrypted).
+Uint8List drmEncryptedEpubVariantName() => buildEpub(
+      title: 'Locked Book',
+      author: 'Rights Holder',
+      withCover: false,
+      withEncryption: true,
+      encryptionEntryName: r'META-INF\Encryption.XML',
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Sealed',
+          bodyHtml: '<p>This prose is notionally behind DRM.</p>',
+        ),
+      ],
+    );
+
+/// A chapter whose `<td>` contains a **nested** `<table>`. Proves Task 3: each
+/// cell's text — outer and inner — appears exactly once in the baked stream (the
+/// descendant-`tr` double-emit must be gone).
+Uint8List nestedTableEpub() => buildEpub(
+      title: 'Nested Tables',
+      author: 'Grid Wright',
+      withCover: false,
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Tabular',
+          bodyHtml: '<table>'
+              '<tr><td>Outeralpha</td><td>Outerbeta</td></tr>'
+              '<tr><td>Beforenest '
+              '<table><tr><td>Innerword</td></tr></table>'
+              ' afternest</td></tr>'
+              '</table>',
+        ),
+      ],
+    );
+
+/// A denser pre-filter torture chapter (beyond [preFilterEpub]): stacked
+/// footnote refs (by `epub:type` and by `class`), nested ruby, an `<img alt>`
+/// inside a heading, and a `role="doc-noteref"` anchor — all must vanish while
+/// the surrounding prose survives.
+Uint8List denseFilterEpub() => buildEpub(
+      title: 'Dense Filter',
+      author: 'Note Heavy',
+      withCover: false,
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Cluttered',
+          bodyHtml: '<h2>Headingkeep '
+              '<img src="d.png" alt="headingaltdrop"/></h2>'
+              '<p>Leadprose'
+              '<a epub:type="footnote" href="#a" id="ra">notedropone</a>'
+              '<a class="fnref" href="#b">notedroptwo</a>'
+              '<a role="doc-noteref" href="#c">notedropthree</a> midprose '
+              '<ruby>語<rt>rubydropa</rt><rb>kept</rb><rt>rubydropb</rt></ruby>'
+              ' endprose.</p>',
+        ),
+      ],
+    );
+
+/// A chapter that is a single **>255-UTF-8-byte** token (no whitespace). The
+/// wire cannot carry it → `encodeChunk` rejects it → typed
+/// `UnencodableContentException` → `unsupported` (NOT `emptyContent`).
+Uint8List oversizedTokenEpub() => buildEpub(
+      title: 'Oversized Token',
+      author: 'Long Word',
+      withCover: false,
+      chapters: <FixtureChapter>[
+        FixtureChapter(
+          title: 'Mono',
+          bodyHtml: '<p>${'a' * 300}</p>',
+        ),
+      ],
+    );
+
+/// Valid-but-tricky metadata: emoji (well-formed surrogate pairs) + accents in
+/// the title/author. Must still import cleanly (the lone-surrogate *stripping*
+/// path is covered by `stripUnpairedSurrogates` unit tests — a lone surrogate
+/// cannot survive the UTF-8 zip round-trip to be exercised end-to-end here).
+Uint8List weirdMetadataEpub() => buildEpub(
+      title: 'Wéird 😀 Tïtle',
+      author: 'Áuthor 🎉 Nâme',
+      withCover: false,
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Plain',
+          bodyHtml: '<p>The body prose here is entirely ordinary.</p>',
+        ),
+      ],
+    );
+
+/// A book whose embedded cover bytes are **not a decodable image**. The cover
+/// must degrade to no-cover (AC2) while the book imports — and no partial cover
+/// file may be left behind.
+Uint8List corruptCoverEpub() => buildEpub(
+      title: 'Bad Cover',
+      author: 'Broken Art',
+      coverPngBytes: Uint8List.fromList(
+        <int>[0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02, 0x03], // not a real PNG
+      ),
+      chapters: const <FixtureChapter>[
+        FixtureChapter(
+          title: 'Readable',
+          bodyHtml: '<p>This book reads fine despite a broken cover.</p>',
+        ),
+      ],
+    );
+
+/// (f3) A real zip whose first bytes are intact but the archive is **truncated**
+/// mid-stream (AC5 `unreadable`).
+Uint8List truncatedZipBytes() {
+  final full = cleanThreeChapterEpub();
+  // Keep enough to look zip-ish but cut the central directory / trailing data.
+  return Uint8List.fromList(full.sublist(0, full.length ~/ 2));
+}
+
+/// (f4) A structurally valid zip that is **not an EPUB** — no OPF, no mimetype
+/// wiring epub_pro can follow (AC5 `unreadable`).
+Uint8List zipButNotEpubBytes() {
+  final archive = Archive()
+    ..add(ArchiveFile.string('readme.txt', 'Just a zip, not a book.'));
+  return Uint8List.fromList(ZipEncoder().encode(archive));
+}
+
 // ── XML/asset builders ────────────────────────────────────────────────────────
+
+/// A minimal OCF encryption manifest. Only its **presence** matters to the
+/// structural DRM probe; the body is plausible but not semantically exercised.
+String _encryptionXml() => '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container"\n'
+    '            xmlns:enc="http://www.w3.org/2001/04/xmlenc#">\n'
+    '  <enc:EncryptedData>\n'
+    '    <enc:CipherData>\n'
+    '      <enc:CipherReference URI="OEBPS/chapter0.xhtml"/>\n'
+    '    </enc:CipherData>\n'
+    '  </enc:EncryptedData>\n'
+    '</encryption>\n';
 
 String _containerXml() => '<?xml version="1.0" encoding="UTF-8"?>\n'
     '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'

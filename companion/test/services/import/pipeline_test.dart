@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/protocol/protocol_keys.dart';
 import 'package:paceturner_companion/protocol/stream_codec.dart';
+import 'package:paceturner_companion/services/import/import_exceptions.dart';
 import 'package:paceturner_companion/services/import/pipeline.dart';
 
 import '../../fixtures/epubs/epub_fixture_builder.dart';
@@ -56,25 +57,59 @@ void main() {
     });
   });
 
-  group('runPipeline — empty input boundary (import_service maps to AC7)', () {
-    test('empty .txt produces zero tokens → bake throws ArgumentError', () {
+  group('runPipeline — typed failure boundary (Story 2.6, AC1)', () {
+    test('empty .txt → TextEmptyContentException (typed, not opaque)', () {
       const req = PipelineRequest(
         rawText: '',
         isMarkdown: false,
         title: 'Empty',
         salt: 0,
       );
-      expect(() => runPipeline(req), throwsArgumentError);
+      expect(
+        () => runPipeline(req),
+        throwsA(isA<TextEmptyContentException>()),
+      );
     });
 
-    test('whitespace-only input throws ArgumentError', () {
+    test('whitespace-only input → TextEmptyContentException', () {
       const req = PipelineRequest(
         rawText: '   \n\n  \t ',
         isMarkdown: false,
         title: 'Blank',
         salt: 0,
       );
-      expect(() => runPipeline(req), throwsArgumentError);
+      expect(
+        () => runPipeline(req),
+        throwsA(isA<TextEmptyContentException>()),
+      );
+    });
+
+    test('all-punctuation input → TextEmptyContentException (zero tokens)', () {
+      const req = PipelineRequest(
+        rawText: '!!! --- ;;; ... ???',
+        isMarkdown: false,
+        title: 'Symbols',
+        salt: 0,
+      );
+      expect(
+        () => runPipeline(req),
+        throwsA(isA<TextEmptyContentException>()),
+      );
+    });
+
+    test('non-empty file with a >255-byte token → UnencodableContentException',
+        () {
+      final req = PipelineRequest(
+        rawText: 'a' * 300, // one whitespace-free token, 300 UTF-8 bytes
+        isMarkdown: false,
+        title: 'Oversized',
+        salt: 0,
+      );
+      // Must NOT be mislabeled empty — it is a clearly non-empty file.
+      expect(
+        () => runPipeline(req),
+        throwsA(isA<UnencodableContentException>()),
+      );
     });
   });
 

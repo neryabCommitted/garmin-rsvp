@@ -123,6 +123,29 @@ void main() {
       expect(extractFromHtml(html, epubFilter: true), 'Cell A Cell B\n\nCell C Cell D');
     });
 
+    test('a nested table is NOT double-emitted (Story 2.6, Task 3)', () {
+      // The inner cell's prose must appear once — folded into the outer cell —
+      // never a second time as its own row (the descendant-tr bug).
+      const html = '<body><table>'
+          '<tr><td>Before <table><tr><td>Inner</td></tr></table> after</td></tr>'
+          '</table></body>';
+      final out = extractFromHtml(html, epubFilter: true);
+      expect('Inner'.allMatches(out).length, 1);
+      expect(out, contains('Before'));
+      expect(out, contains('after'));
+    });
+
+    test('linearizes rows wrapped in thead/tbody', () {
+      const html = '<body><table>'
+          '<thead><tr><th>Head A</th><th>Head B</th></tr></thead>'
+          '<tbody><tr><td>Body A</td><td>Body B</td></tr></tbody>'
+          '</table></body>';
+      expect(
+        extractFromHtml(html, epubFilter: true),
+        'Head A Head B\n\nBody A Body B',
+      );
+    });
+
     test('without the filter a plain paragraph is unchanged', () {
       const html = '<body><p>Plain text.</p></body>';
       expect(extractFromHtml(html, epubFilter: false), 'Plain text.');

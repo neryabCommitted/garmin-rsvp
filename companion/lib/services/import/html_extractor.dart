@@ -129,8 +129,15 @@ void _visit(dom.Element element, List<String> blocks, bool epubFilter) {
 
 /// AC1 table policy = **linearize**: emit each `<tr>` as one block, its cells'
 /// text joined inline by a space. Keeps tabular prose rather than dropping it.
+///
+/// Selects only this table's **direct** rows (via [_directRows]), NOT
+/// `querySelectorAll('tr')` — the latter also matches rows of a `<table>` nested
+/// inside a `<td>`, so the inner prose would be emitted twice (once via the
+/// outer cell's text, once when the loop reached the inner `<tr>`) → mid-sentence
+/// pollution forbidden by AC3 (deferred-work 2.4, line 51). A nested table's
+/// text is preserved exactly once, folded into its containing cell's text.
 void _linearizeTable(dom.Element table, List<String> blocks) {
-  for (final row in table.querySelectorAll('tr')) {
+  for (final row in _directRows(table)) {
     final cells = <String>[];
     for (final cell in row.children) {
       final tag = cell.localName;
@@ -146,6 +153,27 @@ void _linearizeTable(dom.Element table, List<String> blocks) {
       blocks.add(rowText);
     }
   }
+}
+
+/// The `<tr>` rows belonging **directly** to [table] — its own `<tr>` children
+/// plus those wrapped in a direct `<thead>`/`<tbody>`/`<tfoot>` (HTML parsing
+/// auto-inserts a `<tbody>`). Rows of a table nested inside a `<td>` live deeper
+/// and are deliberately excluded, so each cell's text is linearized once.
+Iterable<dom.Element> _directRows(dom.Element table) {
+  final rows = <dom.Element>[];
+  for (final child in table.children) {
+    final tag = child.localName;
+    if (tag == 'tr') {
+      rows.add(child);
+    } else if (tag == 'thead' || tag == 'tbody' || tag == 'tfoot') {
+      for (final r in child.children) {
+        if (r.localName == 'tr') {
+          rows.add(r);
+        }
+      }
+    }
+  }
+  return rows;
 }
 
 /// A block's text. With [epubFilter] off this is `element.text` (verbatim 2.3

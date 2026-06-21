@@ -32,11 +32,13 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:epub_pro/epub_pro.dart';
 import 'package:meta/meta.dart';
 
 import 'cover_extractor.dart';
 import 'html_extractor.dart';
+import 'import_exceptions.dart';
 import 'text_sanitizer.dart';
 import 'tokenizer.dart';
 import 'word_stream_baker.dart';
@@ -76,12 +78,28 @@ final class EpubParse {
   final String? coverFormat;
 }
 
+/// The OCF-standard location for encryption/DRM metadata. Its mere presence in
+/// the container marks the EPUB as encrypted (OCF §4) — a deterministic,
+/// locale-independent signal, unlike `epub_pro`'s parse-error text.
+const String _ocfEncryptionPath = 'META-INF/encryption.xml';
+
 /// Parses [epubBytes] into an [EpubParse]. Async because `EpubReader.readBook`
 /// is async (`compute` accepts async callbacks).
 ///
-/// Throws [EpubEmptyContentException] when nothing tokenizes; lets `epub_pro`'s
-/// own throws (corrupt/DRM/unsupported) propagate for `import_service` to map.
+/// Typed failures (Story 2.6): [EpubEncryptedException] when the container
+/// carries `META-INF/encryption.xml` (detected structurally, before parse);
+/// [EpubEmptyContentException] when nothing tokenizes. `epub_pro`'s own throws
+/// (corrupt/non-zip/malformed) propagate for `import_service` to map to
+/// `unreadable`.
 Future<EpubParse> extractEpub(List<int> epubBytes) async {
+  // AC1: classify DRM by structure, not by message text. Probe the OCF zip for
+  // the encryption manifest before handing the bytes to epub_pro.
+  if (_isEncrypted(epubBytes)) {
+    throw const EpubEncryptedException(
+      'EPUB carries $_ocfEncryptionPath — encrypted/DRM content is unsupported',
+    );
+  }
+
   final bookRef = await EpubReader.openBook(epubBytes);
   final chapterNodes = await EpubReader.readChapters(bookRef.getChapters());
 
@@ -95,18 +113,25 @@ Future<EpubParse> extractEpub(List<int> epubBytes) async {
     );
   }
 
-  // Cover is best-effort: a malformed/missing cover must not sink an otherwise
-  // good import (AC2 — no-cover is a valid state).
+  // Cover is best-effort: a malformed/missing/oversized cover must not sink an
+  // otherwise good import (AC2 — no-cover is a valid state). We catch
+  // `Exception` (not `Object`) so a genuine `Error` — OutOfMemoryError on a
+  // pathological decode, or a programming bug — still propagates and surfaces
+  // as `ioError`/`unreadable` rather than being silently swallowed
+  // (architecture.md:293).
   Uint8List? coverBytes;
   String? coverFormat;
   try {
     final coverImage = await bookRef.readCover();
-    if (coverImage != null) {
+    // Reject an absurdly large source before the resize/re-encode allocation
+    // (a copyResize + encodeJpg on a giant image can OOM the compute isolate;
+    // deferred-work 2.4, line 52). Degrade to no-cover rather than crash.
+    if (coverImage != null && coverWithinBounds(coverImage)) {
       final cover = encodeCover(coverImage);
       coverBytes = cover.bytes;
       coverFormat = cover.format;
     }
-  } catch (_) {
+  } on Exception catch (_) {
     coverBytes = null;
     coverFormat = null;
   }
@@ -138,6 +163,35 @@ void _flatten(EpubChapter node, List<BakeChapter> out) {
   for (final sub in node.subChapters) {
     _flatten(sub, out);
   }
+}
+
+/// True when the OCF container holds [_ocfEncryptionPath] (DRM/encrypted).
+///
+/// Pure-Dart `package:archive` zip walk — reads only the central-directory
+/// entry names, never decompresses content. If the bytes are not a valid zip
+/// the probe returns `false` (not our DRM signal): `epub_pro` then rejects the
+/// bytes and `import_service` maps that to `unreadable`. The probe never throws
+/// — it is bounds-check-and-degrade, not a swallowed failure (NFR8).
+///
+/// Entry-name comparison is tolerant of real-world container variance (R6):
+/// OCF mandates the exact `META-INF/encryption.xml` casing with forward slashes,
+/// but non-conformant producers/re-zippers emit case- or backslash-variants. We
+/// normalize (lowercase + `\`→`/`) before comparing so a DRM book is classified
+/// `unsupported`, not mislabeled `unreadable`. The path is distinctive enough
+/// that case-insensitive matching cannot false-positive on a non-DRM entry.
+bool _isEncrypted(List<int> epubBytes) {
+  try {
+    final archive = ZipDecoder().decodeBytes(epubBytes, verify: false);
+    for (final file in archive.files) {
+      if (file.name.replaceAll(r'\', '/').toLowerCase() ==
+          _ocfEncryptionPath.toLowerCase()) {
+        return true;
+      }
+    }
+  } on Object {
+    return false;
+  }
+  return false;
 }
 
 /// Normalizes EPUB metadata (title, author, chapter title) for persistence:

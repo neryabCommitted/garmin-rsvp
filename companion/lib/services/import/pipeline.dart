@@ -20,6 +20,7 @@ import 'dart:typed_data';
 
 import 'epub_extractor.dart';
 import 'html_extractor.dart';
+import 'import_exceptions.dart';
 import 'text_sanitizer.dart';
 import 'tokenizer.dart';
 import 'word_stream_baker.dart';
@@ -50,16 +51,36 @@ final class PipelineRequest {
 /// Runs the full pure pipeline and returns the [BakedBook] (sendable: `Uint8List`
 /// + immutable value objects), so `compute` can return it across the isolate.
 ///
-/// Throws [ArgumentError] when the input yields zero tokens (empty/whitespace
-/// file): `bake` rejects a zero-token chapter. `import_service` (Task 5) catches
-/// this boundary and maps it to a typed `ImportFailure` (AC7) — never let it
-/// escape as an unhandled crash.
+/// Typed failures (Story 2.6, AC1) — `import_service` catches each by type:
+/// - [TextEmptyContentException] when the file yields zero tokens
+///   (empty/whitespace/all-punctuation), thrown **before** `bake` so the cause
+///   is typed rather than an opaque `ArgumentError` from the baker.
+/// - [UnencodableContentException] when a token cannot ride the SPEC §5 wire
+///   (over 255 UTF-8 bytes / unpaired surrogate). `bake` here always receives
+///   one chapter with ≥1 token, so its only remaining `ArgumentError` source is
+///   `encodeChunk`'s wire-validity rejection — reclassified to the typed failure.
 BakedBook runPipeline(PipelineRequest req) {
   final plain = extractPlainText(req.rawText, isMarkdown: req.isMarkdown);
   final sanitized = sanitize(plain);
   final tokens = tokenize(sanitized);
+  if (tokens.isEmpty) {
+    throw const TextEmptyContentException(
+      'file produced no readable words (empty, whitespace, or all-punctuation)',
+    );
+  }
   final chapter = BakeChapter(title: req.title, tokens: tokens);
-  return bake(title: req.title, chapters: <BakeChapter>[chapter], salt: req.salt);
+  try {
+    return bake(
+      title: req.title,
+      chapters: <BakeChapter>[chapter],
+      salt: req.salt,
+    );
+  } on ArgumentError catch (e) {
+    // One chapter with ≥1 token reaches bake, so this is `encodeChunk`
+    // rejecting a wire-invalid word (oversized / unpaired surrogate), not the
+    // baker's empty-input guard.
+    throw UnencodableContentException(e.message?.toString() ?? e.toString());
+  }
 }
 
 /// Immutable, sendable request for [runEpubPipeline]. The raw EPUB (a ZIP) is
@@ -99,15 +120,25 @@ final class EpubBaked {
 ///
 /// `bake` sets the `chapterStart` flag on each chapter's first word and builds
 /// the manifest chapter index (AC3). Throws [EpubEmptyContentException] when the
-/// EPUB yields no tokens, and propagates `epub_pro`'s parse throws (corrupt /
-/// DRM / unsupported) — `import_service` (Task 6) maps both to typed failures.
+/// EPUB yields no tokens, [EpubEncryptedException] on DRM/encrypted containers,
+/// [UnencodableContentException] when a chapter word cannot ride the wire, and
+/// propagates `epub_pro`'s parse throws (corrupt / malformed) — `import_service`
+/// maps each to a typed failure.
 Future<EpubBaked> runEpubPipeline(EpubPipelineRequest req) async {
   final parse = await extractEpub(req.epubBytes);
-  final baked = bake(
-    title: parse.title,
-    chapters: parse.chapters,
-    salt: req.salt,
-  );
+  final BakedBook baked;
+  try {
+    baked = bake(
+      title: parse.title,
+      chapters: parse.chapters,
+      salt: req.salt,
+    );
+  } on ArgumentError catch (e) {
+    // `extractEpub` guarantees ≥1 chapter, each with ≥1 token, so this is
+    // `encodeChunk` rejecting a wire-invalid word (e.g. a >255-byte token),
+    // not the baker's empty-input guard.
+    throw UnencodableContentException(e.message?.toString() ?? e.toString());
+  }
   return EpubBaked(
     baked: baked,
     author: parse.author,

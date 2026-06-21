@@ -35,6 +35,13 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
   bool _importing = false;
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
 
+  /// AC2: the last failed-import message, shown **inline** on the library
+  /// surface (not a transient toast). Held in screen state — separate from the
+  /// drift-driven [libraryProvider] — so a stream reload never clears it and it
+  /// never shadows the list's own loading/error arms. Cleared on the next
+  /// successful import or on dismiss.
+  String? _lastImportError;
+
   @override
   void initState() {
     super.initState();
@@ -117,22 +124,25 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
     }
 
     if (!mounted) return;
-    if (result is ImportFailure) {
-      // Full inline error UX is 2.6; a SnackBar is enough here.
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_failureMessage(result))),
-      );
-    }
+    // AC2: a failure shows an inline message; a success clears any prior one.
+    setState(() {
+      _lastImportError = result is ImportFailure ? _failureMessage(result) : null;
+    });
   }
 
+  /// Canonical copy (EXPERIENCE.md:114): `Couldn't read "{filename}" — {reason}`.
+  /// ASCII apostrophe + em-dash; non-blaming, actionable reason text per
+  /// `ImportFailureReason` (UX voice — extract-product.md:190).
   String _failureMessage(ImportFailure failure) {
-    final what = switch (failure.reason) {
-      ImportFailureReason.emptyContent => 'is empty',
-      ImportFailureReason.unreadable => 'could not be read',
-      ImportFailureReason.unsupported => 'is not a supported file',
-      ImportFailureReason.ioError => 'could not be saved',
+    final reason = switch (failure.reason) {
+      ImportFailureReason.emptyContent => "it's empty",
+      ImportFailureReason.unreadable =>
+        'the file is damaged or not a valid EPUB',
+      ImportFailureReason.unsupported =>
+        "it's protected (DRM) or uses content we can't read",
+      ImportFailureReason.ioError => "it couldn't be saved",
     };
-    return 'Couldn’t import "${failure.filename}" — it $what.';
+    return 'Couldn\'t read "${failure.filename}" — $reason';
   }
 
   @override
@@ -141,11 +151,26 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Library')),
-      body: library.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, _) => Center(child: Text('Failed to load library: $error')),
-        data: (books) =>
-            books.isEmpty ? const _EmptyLibrary() : _BookList(books: books),
+      body: Column(
+        children: <Widget>[
+          // AC2: inline failure message above the list — visible even when the
+          // import left the library empty, so a failed import still says why.
+          if (_lastImportError != null)
+            _ImportErrorBanner(
+              message: _lastImportError!,
+              onDismiss: () => setState(() => _lastImportError = null),
+            ),
+          Expanded(
+            child: library.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) =>
+                  Center(child: Text('Failed to load library: $error')),
+              data: (books) => books.isEmpty
+                  ? const _EmptyLibrary()
+                  : _BookList(books: books),
+            ),
+          ),
+        ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _importing ? null : _import,
@@ -158,6 +183,35 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
             : const Icon(Icons.add),
         label: Text(_importing ? 'Importing…' : 'Import'),
       ),
+    );
+  }
+}
+
+/// AC2 inline import-failure banner — an M3 [MaterialBanner] rendered in the
+/// library body (not a SnackBar), using the error color role (the phone may use
+/// the full semantic palette; the one-red rule is watch-only — DESIGN.md:26,111).
+class _ImportErrorBanner extends StatelessWidget {
+  const _ImportErrorBanner({required this.message, required this.onDismiss});
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return MaterialBanner(
+      backgroundColor: scheme.errorContainer,
+      leading: Icon(Icons.error_outline, color: scheme.onErrorContainer),
+      content: Text(
+        message,
+        style: TextStyle(color: scheme.onErrorContainer),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: onDismiss,
+          child: const Text('Dismiss'),
+        ),
+      ],
     );
   }
 }

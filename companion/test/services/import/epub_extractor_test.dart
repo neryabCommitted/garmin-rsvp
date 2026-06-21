@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paceturner_companion/services/import/epub_extractor.dart';
+import 'package:paceturner_companion/services/import/import_exceptions.dart';
 
 import '../../fixtures/epubs/epub_fixture_builder.dart';
 
@@ -87,6 +88,48 @@ void main() {
   group('extractEpub — corrupt input surfaces as a throw (AC5)', () {
     test('non-zip bytes throw (mapped to unreadable by import_service)', () async {
       await expectLater(extractEpub(corruptEpubBytes()), throwsA(anything));
+    });
+  });
+
+  group('extractEpub — Story 2.6 structural failure taxonomy', () {
+    test('encryption.xml present → EpubEncryptedException (structural DRM)',
+        () async {
+      await expectLater(
+        extractEpub(drmEncryptedEpub()),
+        throwsA(isA<EpubEncryptedException>()),
+      );
+    });
+
+    test(
+        'non-conformant encryption.xml entry name (casing + backslash) still '
+        'detected → EpubEncryptedException', () async {
+      await expectLater(
+        extractEpub(drmEncryptedEpubVariantName()),
+        throwsA(isA<EpubEncryptedException>()),
+      );
+    });
+
+    test('valid zip but not an EPUB → throws (→ unreadable downstream)',
+        () async {
+      await expectLater(extractEpub(zipButNotEpubBytes()), throwsA(anything));
+    });
+
+    test('truncated zip → throws (→ unreadable downstream)', () async {
+      await expectLater(extractEpub(truncatedZipBytes()), throwsA(anything));
+    });
+
+    test('a corrupt cover degrades to no-cover; the book still parses',
+        () async {
+      final parse = await extractEpub(corruptCoverEpub());
+      expect(parse.coverBytes, isNull);
+      expect(parse.coverFormat, isNull);
+      expect(parse.chapters, isNotEmpty);
+    });
+
+    test('weird-but-valid metadata (emoji + accents) is preserved', () async {
+      final parse = await extractEpub(weirdMetadataEpub());
+      expect(parse.title, contains('😀'));
+      expect(parse.author, contains('🎉'));
     });
   });
 
