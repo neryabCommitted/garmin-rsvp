@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-09
-last_updated: 2026-06-18  # story 2.5 → review (dev-story) (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
+last_updated: 2026-06-21  # story 2.5 → done (code-review: PASS + 4 patches, 2 deferred)  # prior: 2026-06-18 → review (dev-story) (create-story): EPUB import — epub_pro 5.6.0 structure+DOM-pre-filter, cover_extractor (phone-only file), multi-chapter bake (chapterStart+manifest index), OPF author + library-row cover thumbnail, isolate+rollback (stream+cover+rows), .epub picker+share filter; resolves 2.2-deferred ORP word-char-free contract; synthetic-only fixtures; no schema change (author/cover_path pre-shaped in 2.3)
 project: garmin_RSVP
 project_key: NOKEY
 tracking_system: file-system
@@ -57,7 +57,7 @@ development_status:
   2-2-word-stream-baking-pacing-orp-fingerprint-encode: done
   2-3-import-txt-md-into-the-library: done
   2-4-import-epub-with-cover-and-chapters: done
-  2-5-book-detail-and-remove: review  # dev-story 2026-06-18: book detail + remove implemented; 4 ACs + Tasks 1-6 done; 284 tests pass, analyze clean, APK builds; resolved 2.3-deferred jsonl-surgery (document-the-accept); no schema change
+  2-5-book-detail-and-remove: done  # code-review 2026-06-21: PASS (Acceptance Auditor) + 4 patches applied (real bug: chapters-error masked as spinner via AsyncValue.when loading-precedence; +author Key test; +null-book pop coverage; +cover FileImage assert); 2 items deferred (removeBook UI error-surfacing, family autoDispose); 288 tests pass, analyze clean
   2-6-survivable-import-failures: backlog
   epic-2-retrospective: optional
 

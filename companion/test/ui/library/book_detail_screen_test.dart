@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -72,7 +74,11 @@ void main() {
 
     expect(find.text('Moby Dick'), findsWidgets); // AppBar + header
     expect(find.text('Herman Melville'), findsOneWidget);
-    expect(find.byType(Image), findsOneWidget); // cover present
+    // Cover present → the cover branch builds a FileImage at the row's path
+    // (distinct from the errorBuilder placeholder, which renders no Image).
+    final cover = tester.widget<Image>(find.byType(Image));
+    expect(cover.image, isA<FileImage>());
+    expect((cover.image as FileImage).file.path, '/covers/abc12345.jpg');
     // Chapter rows live below the fold in the test viewport — assert the tree.
     expect(find.text('Loomings', skipOffstage: false), findsOneWidget);
     expect(find.text('The Carpet-Bag', skipOffstage: false), findsOneWidget);
@@ -87,13 +93,24 @@ void main() {
     expect(find.byType(Image), findsNothing);
   });
 
-  testWidgets('AC1 — null author omits the author affordance', (tester) async {
+  testWidgets('AC1 — author line (keyed) renders when author is present',
+      (tester) async {
     await tester.pumpWidget(harness(
-      book: sampleBook(title: 'Anon', coverPath: '/covers/x.jpg'),
+      book: sampleBook(title: 'Named', author: 'Some Author'),
     ));
     await tester.pump();
 
-    expect(find.text('by '), findsNothing);
+    expect(find.byKey(const Key('book-author')), findsOneWidget);
+    expect(find.text('Some Author'), findsOneWidget);
+  });
+
+  testWidgets('AC1 — author line is absent entirely when author is null',
+      (tester) async {
+    await tester.pumpWidget(harness(book: sampleBook(title: 'Anon')));
+    await tester.pump();
+
+    // The whole affordance is omitted — not an empty/blank author line.
+    expect(find.byKey(const Key('book-author')), findsNothing);
   });
 
   testWidgets('AC1 — progress is a placeholder (value 0, Not started)',
@@ -168,5 +185,76 @@ void main() {
 
     expect(find.text('Restart Again?'), findsNothing); // dismissed
     expect(spy.removed, isEmpty); // Restart never removes
+  });
+
+  testWidgets('book == null at the root route shows the removed fallback',
+      (tester) async {
+    // No route to pop back to (detail is the root) → the guard keeps the
+    // minimal fallback on screen instead of popping.
+    await tester.pumpWidget(harness(book: null));
+    await tester.pumpAndSettle();
+
+    expect(find.text('This book was removed.'), findsOneWidget);
+  });
+
+  testWidgets('book removed while open → detail pops back to the library',
+      (tester) async {
+    final controller = StreamController<Book?>();
+    addTearDown(controller.close);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        bookDetailProvider(1).overrideWith((ref) => controller.stream),
+        chaptersProvider(1).overrideWith((ref) => Stream.value(const <Chapter>[])),
+      ],
+      child: MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const BookDetailScreen(bookId: 1),
+                  ),
+                ),
+                child: const Text('open detail'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
+
+    controller.add(sampleBook(title: 'Live Book'));
+    await tester.tap(find.text('open detail'));
+    await tester.pumpAndSettle();
+    expect(find.text('Live Book'), findsWidgets); // detail is open
+
+    // Removed out from under the open screen.
+    controller.add(null);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Live Book'), findsNothing); // detail popped
+    expect(find.text('open detail'), findsOneWidget); // back at the library
+  });
+
+  testWidgets('chapters load error surfaces — not a silent "0 chapters"',
+      (tester) async {
+    final chaptersCtrl = StreamController<List<Chapter>>();
+    addTearDown(chaptersCtrl.close);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        bookDetailProvider(1).overrideWith((ref) => Stream.value(sampleBook())),
+        chaptersProvider(1).overrideWith((ref) => chaptersCtrl.stream),
+      ],
+      child: const MaterialApp(home: BookDetailScreen(bookId: 1)),
+    ));
+    chaptersCtrl.addError(Exception('db boom'));
+    await tester.pump(); // resolve book stream
+    await tester.pump(); // deliver chapters error
+    await tester.pump();
+
+    expect(find.textContaining('Failed to load chapters'), findsOneWidget);
+    expect(find.textContaining('0 chapters'), findsNothing);
   });
 }

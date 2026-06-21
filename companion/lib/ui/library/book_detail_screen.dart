@@ -51,22 +51,60 @@ class BookDetailScreen extends ConsumerWidget {
             body: Center(child: Text('This book was removed.')),
           );
         }
-        final chapters = chaptersAsync.value ?? const <Chapter>[];
-        return _DetailView(book: book, chapters: chapters);
+        return _DetailView(book: book, chaptersAsync: chaptersAsync);
       },
     );
   }
 }
 
 class _DetailView extends ConsumerWidget {
-  const _DetailView({required this.book, required this.chapters});
+  const _DetailView({required this.book, required this.chaptersAsync});
 
   final Book book;
-  final List<Chapter> chapters;
+  final AsyncValue<List<Chapter>> chaptersAsync;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final author = book.author;
+    // Resolve the chapters state with error taking precedence over loading.
+    // (A StreamProvider in error reports both `isLoading` and `hasError`, so
+    // `AsyncValue.when` — which checks loading first — would mask the error.)
+    final chapters = chaptersAsync.hasValue ? chaptersAsync.value : null;
+    // The metadata line shows the chapter count only once chapters resolve —
+    // while loading / on error it falls back to the word count rather than
+    // claiming "0 chapters".
+    final metaText = chapters != null
+        ? '${chapters.length} ${chapters.length == 1 ? 'chapter' : 'chapters'} · ${book.totalWords} words'
+        : '${book.totalWords} words';
+    // Chapter list, reading order. A load error / in-flight read is rendered as
+    // such — never silently flattened to an empty list (which would be
+    // indistinguishable from a genuinely chapterless book). Jump-to-chapter is
+    // INERT (Epic 4): rows are disabled (no onTap).
+    final List<Widget> chapterWidgets;
+    if (chaptersAsync.hasError) {
+      chapterWidgets = <Widget>[
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text('Failed to load chapters: ${chaptersAsync.error}'),
+        ),
+      ];
+    } else if (chapters != null) {
+      chapterWidgets = <Widget>[
+        for (final c in chapters)
+          ListTile(
+            enabled: false,
+            leading: Text('${c.chapterIndex + 1}'),
+            title: Text(c.title),
+          ),
+      ];
+    } else {
+      chapterWidgets = const <Widget>[
+        Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ];
+    }
     return Scaffold(
       appBar: AppBar(title: Text(book.title)),
       body: ListView(
@@ -78,11 +116,15 @@ class _DetailView extends ConsumerWidget {
           if (author != null && author.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(author, style: Theme.of(context).textTheme.titleMedium),
+              child: Text(
+                author,
+                key: const Key('book-author'),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             ),
           const SizedBox(height: 8),
           Text(
-            '${chapters.length} ${chapters.length == 1 ? 'chapter' : 'chapters'} · ${book.totalWords} words',
+            metaText,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 24),
@@ -118,15 +160,7 @@ class _DetailView extends ConsumerWidget {
           ),
           const SizedBox(height: 24),
           Text('Chapters', style: Theme.of(context).textTheme.titleSmall),
-          // Chapter list, reading order. Jump-to-chapter is INERT (Epic 4):
-          // rows are disabled (no onTap) so nothing reads as functional.
-          ...chapters.map(
-            (c) => ListTile(
-              enabled: false,
-              leading: Text('${c.chapterIndex + 1}'),
-              title: Text(c.title),
-            ),
-          ),
+          ...chapterWidgets,
         ],
       ),
     );

@@ -4,7 +4,7 @@ baseline_commit: 20cc9ee4324d552b2714f74da3f65a5c49269b16
 
 # Story 2.5: Book detail and remove
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -77,7 +77,14 @@ This is the **library-management UI** of Epic 2, built on the shell stood up by 
 
 ### Review Findings
 
-_Pending implementation + code review._
+_Code review 2026-06-21 (Blind Hunter + Edge Case Hunter + Acceptance Auditor). Acceptance Auditor: PASS — all 4 ACs + layering/schema/scope satisfied; both disclosed ctor deviations acceptable._
+
+- [x] [Review][Defer] `removeBook` error contract unfulfilled — `library_service.dart:37-38` doc says an unexpected error "propagates so the UI can surface it", but `_confirmRemove` (`book_detail_screen.dart:155-157`) `await`s `removeBook` with no `try/catch`; on an unexpected throw the row is already deleted, the screen pops on the `null` emission, and the exception is uncaught (no SnackBar) — deferred: Remove happy-path is idempotent; UI error-surfacing rides the Epic-4 error-UX pass.
+- [x] [Review][Patch] **(real bug)** Chapters load error masked as a perpetual spinner — a StreamProvider in error reports both `isLoading` and `hasError`, and `AsyncValue.when` checks loading first, so a DB read error never surfaced. Fixed with error-precedence checks (`hasError` → error widget; else value → list; else loading); metadata line shows "N chapters" only once chapters resolve [companion/lib/ui/library/book_detail_screen.dart:68-104] — covered by new "chapters load error surfaces" test
+- [x] [Review][Patch] Tautological null-author test replaced — author line now carries `Key('book-author')`; split into present (key found + text) and null (key absent) cases [companion/lib/ui/library/book_detail_screen.dart:115-119; companion/test/ui/library/book_detail_screen_test.dart]
+- [x] [Review][Patch] Added widget coverage for the `book == null` pop path — root-route fallback ("This book was removed.") and the removed-while-open transition (push detail → emit null → pops back to library) [companion/test/ui/library/book_detail_screen_test.dart]
+- [x] [Review][Patch] Cover-present test strengthened to assert the cover branch builds a `FileImage` at the row's path (distinct from the errorBuilder placeholder, which renders no `Image`) [companion/test/ui/library/book_detail_screen_test.dart]
+- [x] [Review][Defer] Family providers `bookDetailProvider`/`chaptersProvider` are not `.autoDispose` — per-book drift subscriptions persist for the session [companion/lib/ui/library/library_providers.dart:39-45] — deferred, low-risk (bounded library; mirrors existing non-autoDispose `libraryProvider`)
 
 ## Dev Notes
 
