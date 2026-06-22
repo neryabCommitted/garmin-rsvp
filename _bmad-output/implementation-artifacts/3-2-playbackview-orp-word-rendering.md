@@ -3,7 +3,7 @@ baseline_commit: 49af5c7cbad07d13839f73fbafd6c3edfce02d09
 ---
 # Story 3.2: PlaybackView — ORP word rendering
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -207,3 +207,12 @@ Amelia (dev-story) — Claude Opus 4.8 (claude-opus-4-8[1m]).
 ### Change Log
 - 2026-06-22 — Story 3.2 implemented (dev-story): OrpLayout pure helpers + PlaybackView ORP render surface + timer loop over CannedWordSource (base64 dev stream). 5/5 ACs met; resolves 3.1 deferred #1 (fontSize clamp) + #4 (per-duration timer arming). 46/46 host tests green @ Strict L3, release build clean.
 - 2026-06-22 — AC4 long-word fixes from on-device visual check: fit-to-width (shrink focal word down the font ramp to the largest size that fits) + bidirectional margin-clamp (shift left/right, pivot drifts) + ramp extended to TINY/XTINY (RAMP_LENGTH 5) + focal-word inset `FOCAL_EDGE=8` (round-display centerline width). `counterrevolutionaries` now renders whole. All 5 ACs visually confirmed on the real Fenix 8.
+
+## Review Findings
+
+Code review 2026-06-22 — 3 adversarial layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor). All 5 ACs MET in code (visual ACs hardware-confirmed by dev, not diff-verifiable). 1 patch, 3 deferred, 8 dismissed as noise/false-positive (incl. phantom index()/currentRecord() "desync" — verified consistent: `currentRecord()` == `wordAt(index())`, ReaderEngine.mc:201-203).
+
+- [x] [Review][Patch] Burn-in jitter recomputed AFTER `requestUpdate()` on pause/finish — the new still-frame jitter was never painted (no further repaint comes while frozen), defeating the stated burn-in refresh on the held frame [watch/source/views/PlaybackView.mc:99-109] — FIXED 2026-06-22: `onTimerTick` now recomputes jitter BEFORE the (sole) `requestUpdate` on the frozen branch. Verified: both builds clean @ Strict L3, 46/46 tests PASS.
+- [x] [Review][Defer] AC4 residual: a word wider than the smallest ramp font (XTINY) at the `FOCAL_EDGE` budget clips on the right — `fitFontIndex` returns the smallest index without a final fit-check, and the bidirectional clamp's `else if` corrects only one side [watch/source/views/PlaybackView.mc:216-220, 268-277] — deferred, not triggered by the shipped canned corpus (`counterrevolutionaries` confirmed whole on-device); the Atkinson fine-grained BMFont swap (own story) reworks this fit math behind the same `fontFor()` seam.
+- [x] [Review][Defer] `OrpLayout.utf8CharLen` does not enforce the overlong/surrogate sub-checks `StreamDecoder.isValidUtf8` applies — `splitAtPivot`'s "never crash on any input" contract relies on upstream decoder validation; a hand-built/contingency `CannedWordSource` could feed malformed lead-shaped bytes into `convertEncodedString` (uncatchable system error) [watch/source/views/OrpLayout.mc:19-25] — deferred, not reachable in the shipped path (decoder rejects overlong/surrogate before records reach the helper).
+- [x] [Review][Defer] AC4/Task-3 wording says clamp at "the 28px watch edge"; code intentionally uses `FOCAL_EDGE=8` for the focal word (guides retain 28px) — the validated on-device behavior [watch/source/views/PlaybackView.mc:33-38] — deferred, doc reconciliation only; code is correct, AC text is stale.

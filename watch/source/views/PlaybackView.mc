@@ -98,13 +98,17 @@ class PlaybackView extends WatchUi.View {
     // imports no System; the view supplies `now` via System.getTimer().
     function onTimerTick() as Void {
         _engine.onTick(System.getTimer());
-        WatchUi.requestUpdate();
         if (_engine.isPlaying() || _engine.isRamping()) {
+            WatchUi.requestUpdate();
             armTimer();
         } else {
             // Paused / finished: stop ticking (no runaway timer, no per-tick work
-            // while frozen) and refresh the burn-in jitter for the still frame.
+            // while frozen). Refresh the burn-in jitter for the still frame BEFORE
+            // the repaint — no further tick comes while frozen, so the new offset
+            // must be applied to the very next (and only) requestUpdate or it is
+            // never drawn.
             recomputeJitter();
+            WatchUi.requestUpdate();
         }
     }
 
