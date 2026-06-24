@@ -36,6 +36,13 @@ module ReaderEngineTestSupport {
         return new Reader.ReaderEngine(new FakeWordSource(sampleWords()), 250, SettingsModel.PAUSE_COAST);
     }
 
+    // A fresh engine seeded at a specific starting WPM (for the adaptive-step
+    // cases). Source is never driven, so it stays IDLE — stepWpmUp/Down are pure
+    // math over the WPM field and do not require a playing engine.
+    function engineAtWpm(wpm as Number) as Reader.ReaderEngine {
+        return new Reader.ReaderEngine(new FakeWordSource(sampleWords()), wpm, SettingsModel.PAUSE_COAST);
+    }
+
     // Advance the engine by exactly one beat/word, ticking precisely at its due
     // time (elapsed == currentDuration) so no catch-up cap is involved.
     function stepDue(engine as Reader.ReaderEngine) as Void {
@@ -189,6 +196,84 @@ function engineWpmChangeTakesEffectNextWordNoRefetch(logger as Test.Logger) as B
     ReaderEngineTestSupport.stepDue(engine); // word 1, bonus 0 -> 120 at new WPM
     if (engine.index() != 1) { logger.error("did not advance to word 1"); return false; }
     if (engine.currentDuration() != 120) { logger.error("new WPM not applied next word"); return false; }
+    return true;
+}
+
+// ── AC2 (Story 3.3): adaptive WPM step, keyed on the current WPM ──────────────
+
+(:test)
+function engineAdaptiveStepUp(logger as Test.Logger) as Boolean {
+    // Step keyed on the CURRENT wpm before stepping: 10 below 100, 25 at/above.
+    var e90 = ReaderEngineTestSupport.engineAtWpm(90);
+    e90.stepWpmUp();
+    if (e90.wpm() != 100) { logger.error("up 90 -> 100 (step 10)"); return false; }
+
+    var e100 = ReaderEngineTestSupport.engineAtWpm(100);
+    e100.stepWpmUp();
+    if (e100.wpm() != 125) { logger.error("up 100 -> 125 (step 25)"); return false; }
+
+    var e250 = ReaderEngineTestSupport.engineAtWpm(250);
+    e250.stepWpmUp();
+    if (e250.wpm() != 275) { logger.error("up 250 -> 275 (step 25)"); return false; }
+    return true;
+}
+
+(:test)
+function engineAdaptiveStepDown(logger as Test.Logger) as Boolean {
+    // The boundary case: down from 100 uses step 25 (current is >= 100) -> 75.
+    var e100 = ReaderEngineTestSupport.engineAtWpm(100);
+    e100.stepWpmDown();
+    if (e100.wpm() != 75) { logger.error("down 100 -> 75 (step 25, keyed on current >= 100)"); return false; }
+
+    var e125 = ReaderEngineTestSupport.engineAtWpm(125);
+    e125.stepWpmDown();
+    if (e125.wpm() != 100) { logger.error("down 125 -> 100 (step 25)"); return false; }
+
+    var e90 = ReaderEngineTestSupport.engineAtWpm(90);
+    e90.stepWpmDown();
+    if (e90.wpm() != 80) { logger.error("down 90 -> 80 (step 10)"); return false; }
+
+    var e250 = ReaderEngineTestSupport.engineAtWpm(250);
+    e250.stepWpmDown();
+    if (e250.wpm() != 225) { logger.error("down 250 -> 225 (step 25)"); return false; }
+    return true;
+}
+
+(:test)
+function engineAdaptiveStepClampsAtEdges(logger as Test.Logger) as Boolean {
+    // The step routes through clampWpm: down from WPM_MIN stays, up from WPM_MAX
+    // stays (bounds-check-and-degrade — no out-of-range WPM ever reaches timing).
+    var lo = ReaderEngineTestSupport.engineAtWpm(SettingsModel.WPM_MIN); // 10
+    lo.stepWpmDown();
+    if (lo.wpm() != SettingsModel.WPM_MIN) { logger.error("down from WPM_MIN did not clamp"); return false; }
+
+    var hi = ReaderEngineTestSupport.engineAtWpm(SettingsModel.WPM_MAX); // 1000
+    hi.stepWpmUp();
+    if (hi.wpm() != SettingsModel.WPM_MAX) { logger.error("up from WPM_MAX did not clamp"); return false; }
+    return true;
+}
+
+(:test)
+function engineStepWpmDoesNotInterruptStream(logger as Test.Logger) as Boolean {
+    // AC2 "without interrupting the stream": stepping WPM mid-play must NOT alter
+    // the CURRENT word's already-computed duration and must NOT re-fetch content —
+    // the new pace lands on the next word (stepWpm* route through setWpm).
+    var source = new FakeWordSource(ReaderEngineTestSupport.sampleWords());
+    var engine = new Reader.ReaderEngine(source, 250, SettingsModel.PAUSE_COAST);
+    engine.play(0);
+    for (var i = 0; i < Reader.RAMP_BEATS; i++) { ReaderEngineTestSupport.stepDue(engine); }
+    if (engine.index() != 0 || engine.currentDuration() != 240) { logger.error("setup: word0 @ 240"); return false; }
+
+    var callsBefore = source.wordAtCalls;
+    engine.stepWpmUp(); // 250 -> 275
+    if (engine.wpm() != 275) { logger.error("stepWpmUp did not raise wpm"); return false; }
+    if (engine.currentDuration() != 240) { logger.error("step altered current word duration"); return false; }
+    if (source.wordAtCalls != callsBefore) { logger.error("stepWpmUp re-fetched content"); return false; }
+    if (!engine.isPlaying()) { logger.error("stepWpmUp disturbed playing state"); return false; }
+
+    ReaderEngineTestSupport.stepDue(engine); // word 1, bonus 0 -> 60000/275 = 218 at new WPM
+    if (engine.index() != 1) { logger.error("did not advance to word 1"); return false; }
+    if (engine.currentDuration() != 60000 / 275) { logger.error("new WPM not applied next word"); return false; }
     return true;
 }
 

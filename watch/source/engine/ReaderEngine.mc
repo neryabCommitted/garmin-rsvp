@@ -178,6 +178,28 @@ module Reader {
             _pauseMode = pauseMode;
         }
 
+        // Adaptive WPM step (AC2, Story 3.3). The step magnitude is keyed on the
+        // CURRENT WPM *before* stepping: finer (10) below 100 wpm where each word
+        // is long and a 25-step would feel coarse, larger (25) at/above 100. Both
+        // route through setWpm -> clampWpm, so the edges clamp to [WPM_MIN, WPM_MAX]
+        // (down from 10 stays 10, up from 1000 stays 1000) and the change still
+        // takes effect on the NEXT word with no re-fetch and no drift (AC2: the
+        // stream is never interrupted). Engine stays Lang-only — no System/WatchUi.
+        function stepWpmUp() as Void {
+            setWpm(_wpm + adaptiveStep());
+        }
+
+        function stepWpmDown() as Void {
+            setWpm(_wpm - adaptiveStep());
+        }
+
+        // Step magnitude keyed on the current WPM (before the step is applied), so
+        // e.g. up from 90 -> 100 (step 10) but up from 100 -> 125 and down from
+        // 100 -> 75 (step 25). Private — host tests pin it through stepWpmUp/Down.
+        private function adaptiveStep() as Number {
+            return _wpm < 100 ? 10 : 25;
+        }
+
         // ── position & transition surface (Task 7 — read by SyncManager later) ──
 
         function index() as Number { return _index; }

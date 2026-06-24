@@ -13,9 +13,22 @@ import Toybox.WatchUi;
 //
 // Scope (Story 3.2): ORP word composition, split guides, phantoms, long-word
 // margin-clamp, burn-in jitter, and the per-word timer loop with auto-play on show.
-// OUT: the input map / playback controls (Story 3.3), the paused progress readout
-// + context view (Story 3.4) — this view draws NO persistent bright chrome while
-// words flow ("the screen owes the reader nothing but the word").
+//
+// Story 3.3 adds a small ACTION API (pauseOrResume / stepWpm / rewindOne, plus
+// the Settings-reading helpers the delegate needs) and a TRANSIENT WPM readout.
+// Input flows delegate -> view -> engine only; the view still never references
+// the delegate, and the engine never references the view (AR15, no cycle). The
+// readout is the ONE allowed playing-state overlay (per UX): it is Ink-Dim (dim,
+// not bright) and self-clearing, so it does NOT violate Story 3.2 AC5's "no
+// persistent BRIGHT chrome while words flow".
+//
+// Story 3.4 adds the PAUSED-only progress readout (drawPausedReadout — book %,
+// time-left, WPM in Ink-Dim, drawn ONLY while engine.isPaused, never while words
+// flow — UX-DR8) and openContextView() (pushes the scrollable PausedContextView).
+// onShow's auto-play is now guarded to STATE_IDLE so a pop-back from the context
+// view stays PAUSED (AC3) instead of resuming. While words flow the view still
+// draws NO persistent bright chrome ("the screen owes the reader nothing but the
+// word").
 class PlaybackView extends WatchUi.View {
 
     // ── DESIGN palette (DESIGN.md Colors 102-113) — one place, by name, no inline
@@ -24,6 +37,7 @@ class PlaybackView extends WatchUi.View {
     private const COLOR_VOID = 0x000000;       // true-black AMOLED canvas
     private const COLOR_INK = 0xEAE6DF;         // focal word
     private const COLOR_INK_FAINT = 0x45423E;   // guides + phantoms
+    private const COLOR_INK_DIM = 0x8A867F;     // transient WPM readout (watch-meta)
     private const COLOR_PIVOT = 0xFF5349;       // pivot letter + anchor ticks
 
     // ── composition geometry (DESIGN / mockups/key-playback.html, a 454-px
@@ -51,6 +65,12 @@ class PlaybackView extends WatchUi.View {
     // ── timer ──
     private const TIMER_FLOOR_MS = 50;    // platform timer floor (AR13)
 
+    // ── transient WPM readout (AC2) ──
+    // Flashed for ~900 ms on a WPM step, then self-clears: the playback tick loop
+    // repaints every word, so the first repaint past the deadline simply drops it.
+    // "Visible when you look for it, invisible at reading speed" (DESIGN.md:122).
+    private const READOUT_MS = 900;
+
     private var _settings as SettingsModel.Settings;
     private var _source as CannedWordSource;
     private var _engine as Reader.ReaderEngine;
@@ -63,6 +83,10 @@ class PlaybackView extends WatchUi.View {
     private var _jitterX as Number;
     private var _jitterY as Number;
 
+    // ms deadline until which the transient WPM readout is drawn (0 = not showing).
+    // Set in stepWpm(); compared against System.getTimer() in onUpdate.
+    private var _wpmReadoutUntil as Number;
+
     function initialize() {
         View.initialize();
         _settings = new SettingsModel.Settings();
@@ -74,6 +98,7 @@ class PlaybackView extends WatchUi.View {
         _timer = new Timer.Timer();
         _jitterX = 0;
         _jitterY = 0;
+        _wpmReadoutUntil = 0;
     }
 
     // Auto-play on show so playback is demonstrable without input (Story 3.3 owns
@@ -81,14 +106,107 @@ class PlaybackView extends WatchUi.View {
     // per-word println (the 700-WPM logging anti-pattern, AR25).
     function onShow() as Void {
         recomputeJitter();
-        _engine.play(System.getTimer()); // re-arms the 3-beat ramp; no-op if empty
+        // Auto-play ONLY from a never-played engine (first-launch demo, 3.2/3.3).
+        // When the Story 3.4 context view is popped, the revealed PlaybackView fires
+        // onShow again — guarding on STATE_IDLE keeps it PAUSED (AC3) instead of
+        // resuming. Becoming visible while live re-arms the loop; PAUSED/FINISHED
+        // stay frozen with no timer. Pre-aligns with Story 3.6 "resume lands Paused".
+        if (_engine.state() == Reader.STATE_IDLE) {
+            _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
+            armTimer();
+        } else if (_engine.isPlaying() || _engine.isRamping()) {
+            armTimer(); // became visible while live — keep the loop running
+        }
         System.println(Lang.format("PlaybackView ready: words=$1$ wpm=$2$ fontIdx=$3$",
             [_source.wordCount(), _engine.wpm(), _fontIndex]));
-        armTimer();
+        WatchUi.requestUpdate();
     }
 
     function onHide() as Void {
         _timer.stop();
+    }
+
+    // ── playback control surface (Story 3.3) ──
+    // The delegate calls these; the view drives the engine. None of them stops the
+    // timer manually: coast pause needs ticks to reach the sentence end, and
+    // instant pause / rewind settle on the existing onTimerTick paused-branch
+    // (recompute jitter + requestUpdate, no re-arm). Resume re-arms (the timer
+    // self-stopped on pause). [story Task 3]
+
+    // START / tap. Coast pause keeps ticking to the sentence end via the existing
+    // loop; instant pause settles on the next tick; both freeze in onTimerTick's
+    // paused branch. Resume re-arms the ramp (engine.play) and the timer. FINISHED
+    // is terminal — play() no-ops it, so there is no resume from the end.
+    function pauseOrResume() as Void {
+        if (_engine.isPlaying() || _engine.isRamping()) {
+            _engine.requestPause();
+            WatchUi.requestUpdate();
+        } else if (_engine.isPaused()) {
+            _engine.play(System.getTimer()); // re-arms the 3-beat ramp
+            armTimer();                       // timer self-stopped while paused
+            WatchUi.requestUpdate();
+        }
+    }
+
+    // UP/DOWN while playing. The WPM change takes effect on the NEXT word with no
+    // re-fetch and no drift (engine contract, AC2 "without interrupting the
+    // stream") — so NO timer change here. Arm the transient readout and repaint.
+    function stepWpm(up as Boolean) as Void {
+        if (up) {
+            _engine.stepWpmUp();
+        } else {
+            _engine.stepWpmDown();
+        }
+        _wpmReadoutUntil = System.getTimer() + READOUT_MS;
+        WatchUi.requestUpdate();
+    }
+
+    // Swipe-right (touch) or button-path rewind (START to pause, UP while paused).
+    // engine.rewind() auto-pauses, is stackable, and clamps at word 0. Recompute
+    // the jitter for the new still frame and repaint. (If we were playing, the
+    // pending one-shot tick fires once more into the paused branch — a harmless
+    // jitter refresh; if we were already paused there is no pending tick, so this
+    // repaint is the one that lands.)
+    function rewindOne() as Void {
+        _engine.rewind();
+        recomputeJitter();
+        WatchUi.requestUpdate();
+    }
+
+    // DOWN / swipe-up while paused (Story 3.4, AC2). Push the scrollable context view
+    // (a CustomMenu — native fluid scroll) over this one, snapshotting the (frozen)
+    // position. Guarded: context is a paused-only affordance, and a null current record
+    // (empty/unbuffered book) has no paragraph to show — degrade to a no-op. The
+    // PausedContextView wraps the paragraph at construction; PlaybackView keeps NO
+    // reference to the pushed menu/delegate (no GC cycle, AR15), and the menu holds
+    // only the read-only line items, never the engine or this view. BACK in the
+    // delegate pops back to this still-frame (AC3).
+    function openContextView() as Void {
+        if (!_engine.isPaused()) {
+            return;
+        }
+        if (_engine.currentRecord() == null) {
+            return;
+        }
+        var ctx = new PausedContextView(_source, _engine.index());
+        WatchUi.pushView(ctx, new PausedContextDelegate(), WatchUi.SLIDE_UP);
+    }
+
+    // ── thin Settings/engine reads for the delegate (keep the delegate dumb) ──
+    function touchEnabled() as Boolean {
+        return _settings.touchControls;
+    }
+
+    // The handedness-mirrored rewind swipe direction (UX: swipe direction mirrors
+    // the reading hand). Right-handed -> SWIPE_RIGHT, left-handed -> SWIPE_LEFT.
+    function rewindSwipeDirection() as Number {
+        return _settings.handedness == SettingsModel.HAND_LEFT
+            ? WatchUi.SWIPE_LEFT
+            : WatchUi.SWIPE_RIGHT;
+    }
+
+    function isPausedState() as Boolean {
+        return _engine.isPaused();
     }
 
     // Timer fire: drive time forward, repaint the now-selected word, then re-arm to
@@ -140,6 +258,7 @@ class PlaybackView extends WatchUi.View {
             dc.setColor(COLOR_INK, Graphics.COLOR_TRANSPARENT);
             dc.drawText(anchorCol, cy, fontFor(_fontIndex), _engine.rampRemaining().toString(),
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+            drawWpmReadout(dc, w, h);
             return;
         }
 
@@ -148,11 +267,84 @@ class PlaybackView extends WatchUi.View {
             // Unbuffered / empty book — draw nothing for the word, keep the frame
             // (bounds-check-and-degrade, NFR8/AR24).
             drawGuides(dc, anchorCol, cy, w);
+            drawWpmReadout(dc, w, h);
+            drawPausedReadout(dc, w, h);
             return;
         }
 
         drawGuides(dc, anchorCol, cy, w);
         drawWord(dc, rec, anchorCol, cy, w);
+        drawWpmReadout(dc, w, h);
+        drawPausedReadout(dc, w, h);
+    }
+
+    // Paused progress readout (AC1). Drawn ONLY on the paused still-frame — book %,
+    // time-left, and the current WPM in Ink-Dim. Gated on isPaused() so ramp /
+    // playing / FINISHED / IDLE draw NOTHING (UX-DR8: "while words flow, the screen
+    // owes the reader nothing but the word"). Distinct from drawWpmReadout (the
+    // transient PLAYING overlay, gated on isPlaying||isRamping) — the two can never
+    // draw together. Pure draw over the already-frozen paused frame: it touches
+    // neither the timer nor the engine (the paused state intentionally runs no
+    // timer — onTimerTick self-stops on pause).
+    //
+    // "Fades in" → MVP renders IMMEDIATELY in Ink-Dim: Garmin drawText has no alpha,
+    // and a multi-frame brightness ramp would need a timer re-armed on pause (the
+    // paused state deliberately runs none). A true opacity fade stays OUT (optional
+    // on-device polish). [DESIGN.md:153 "appears only when paused"; UX-DR8]
+    private function drawPausedReadout(dc as Graphics.Dc, w as Number, h as Number) as Void {
+        if (!_engine.isPaused()) {
+            return;
+        }
+        var idx = _engine.index();
+        var count = _source.wordCount();
+        var pct = PausedLayout.bookPercent(idx, count);
+        // wordsRemaining = the current word through the end, inclusive (so a pause on
+        // the last word still reads 1 word / its bonus remaining). The bonus sum runs
+        // ONCE here (paused is not the hot path), NOT per word. Story 4.1 swaps the
+        // sum for the manifest's O(1) cumulative bonus behind PausedLayout.
+        var wordsRemaining = count - idx;
+        var bonusRemaining = PausedLayout.sumBonusMs(_source, idx, count - 1);
+        var timeLeft = PausedLayout.formatRemaining(
+            PausedLayout.timeRemainingMs(wordsRemaining, _engine.wpm(), bonusRemaining));
+
+        dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
+        var font = Graphics.FONT_SYSTEM_TINY; // watch-meta ~22px (as drawWpmReadout)
+        var lineH = dc.getFontHeight(font);
+        var cx = w / 2 + _jitterX;
+        // Lower third, clear of the focal word and the bottom split hairline, riding
+        // the same ±2px session jitter as the rest of the composition (burn-in).
+        var line1Y = h * 7 / 10 + _jitterY;
+        dc.drawText(cx, line1Y, font, pct.toString() + "%",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+        dc.drawText(cx, line1Y + lineH, font,
+            timeLeft + " left · " + _engine.wpm().toString() + " wpm",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+    }
+
+    // Transient WPM readout (AC2). Drawn ONLY while NOT paused and while the
+    // ~900 ms deadline set by stepWpm() has not elapsed. Ink-Dim, a small native
+    // face (watch-meta 22px), seated in the lower third clear of the focal word,
+    // carrying the same burn-in jitter as the rest of the composition. It is
+    // transient and DIM — the one allowed playing-state overlay (UX) — so it does
+    // NOT break Story 3.2 AC5 ("no persistent BRIGHT chrome while words flow"). It
+    // self-clears: the playback loop repaints every word, and the first repaint
+    // past the deadline simply does not draw it (no second clear-timer needed).
+    private function drawWpmReadout(dc as Graphics.Dc, w as Number, h as Number) as Void {
+        if (!(_engine.isPlaying() || _engine.isRamping())) {
+            // Draw ONLY while the word stream is live (playing or ramping). Paused
+            // gets no overlay (that readout is 3.4); FINISHED/IDLE have no repaint
+            // loop, so a readout drawn there would never self-clear and would stick
+            // as persistent chrome until the next input (review 2026-06-23 patch).
+            return;
+        }
+        if (System.getTimer() >= _wpmReadoutUntil) {
+            return; // flash has elapsed (or was never armed) — self-cleared
+        }
+        dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
+        var rx = w / 2 + _jitterX;
+        var ry = h * 3 / 4 + _jitterY; // lower third, below the bottom split hairline
+        dc.drawText(rx, ry, Graphics.FONT_SYSTEM_TINY, _engine.wpm().toString() + " wpm",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
 
     // Split guide marks (AC2): split hairlines above/below in Ink-Faint with a gap
