@@ -12,6 +12,13 @@ Per Nerya's direction at the Epic 2 retrospective, the cheap carry-forward debt 
 
 **Left at their binding stories (premature to do now):** the Gate-V4 pacing/ASCII-fold fidelity bundle (Story 3.9 hardware recalibration) and the Epic-4 share-sheet/error-UX items. Story 2.7 (re-import dedup) is being built as its own story next.
 
+## Deferred from: code review of 3-4-paused-view-context-on-pause (2026-06-28)
+
+- **Context focus-line wrong on a null/unbuffered record before the current word** — `PausedContextView.wrap()` skips null records via `continue` (line 122), so `currentLine` (line 139) is never set for the current word if an earlier record in the paragraph is null, leaving focus at line 0 and the bright current word possibly off-screen at open. Unreachable under the fully-buffered `CannedWordSource`; activates with the Epic-4 chunked `BookWordSource` (`wordAt → null` "not yet buffered"). Fix alongside the chunked source.
+- **`drawPausedReadout` missing the null-`currentRecord` guard** — `PlaybackView.openContextView` guards `currentRecord() == null` (line 188) but `drawPausedReadout` (lines 294-308) does not; it computes %/time-left over a possibly-null record. Safe under CannedWordSource; add the matching guard when a non-buffered source lands (Epic 4).
+- **`_wpmReadoutUntil` deadline lacks a `getTimer()` wraparound guard** — `PlaybackView.mc:160` (`= getTimer() + READOUT_MS`) / `:340` (`getTimer() >= _wpmReadoutUntil`): near the 32-bit timer wrap the transient WPM flash silently drops for one window. Pre-existing from Story 3.3 (the field + pattern); only the consuming body is new here. Low.
+- **Context lines wrapped to full diameter may clip on the round face** — `PausedContextView` wraps every line to `usable = screenW - 2*MARGIN` (line 59), but only the vertically-centered line has that full chord on a round Fenix; lines scrolled toward the top/bottom could clip horizontally. On-device check (2026-06-24) passed on the canned paragraph; visual polish, revisit if a long paragraph clips at the edges.
+
 ## Deferred from: code review of 2-3-import-txt-md-into-the-library (2026-06-15)
 
 - **Share-sheet silent-drop** (`companion/lib/ui/library/library_screen.dart:104`): a delivery arriving while an import is in-flight (warm `mediaStream` event, or a second `SEND` batch) is silently dropped by `if (_importing) return;` — no SnackBar, violates the "no silent" principle. Deferred because the fix is a queue/notify *UX* decision (queue all vs. reject-with-message vs. ignore), not a mechanical patch, and the share path is manual-on-device-pending. Resolve during the share-sheet hardening / on-device verification pass. Source: Blind Hunter + Edge Case Hunter + Acceptance Auditor, Story 2.3 review.

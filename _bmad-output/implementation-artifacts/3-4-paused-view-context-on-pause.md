@@ -3,7 +3,7 @@ baseline_commit: 74772bcbadf58ea762ae144e79965f3846c243ab
 ---
 # Story 3.4: Paused view & context-on-pause
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -99,6 +99,19 @@ so that I can recover after a glance away (FR11).
   - [x] Compile clean at **Strict (level 3)** for BOTH builds — unit-test build and release (`monkeyc -l 3 -r`). Strictness never lowered. Watch the new `actionForSwipe` 4-arg signature, the `WatchUi.pushView`/`popView`/`SLIDE_*` enums, and `dc.getFontHeight`/`getTextWidthInPixels` typings at L3. [Source: architecture.md:314; 3-3 Debug Log; 3-2 Debug Log]
   - [x] Run host tests in the CI image (`ghcr.io/matco/connectiq-tester`, **bare positional** `… fenix847mm` form — NOT a trailing `-c`, which the matco ENTRYPOINT swallows and hangs; see 3-3 Debug Log) **after `rm -f watch/bin/app.prg`** (stale-binary trap). The current **55** tests + new `PausedLayoutTest` + new `InputMapTest` cases must all pass and the **count must rise**. [Source: watch-tests-local-via-ci-docker-image memo; 3-3 Debug Log lines 180-182]
   - [x] **On-device check on the real Fenix 8 (sideload — host tests can't see view-stack push/pop, scroll, or readout legibility; REQUIRED).** Confirm: (1) on pause (coast→sentence-end) the Ink-Dim readout appears with plausible %, time-left, WPM and is **gone** the instant you resume; (2) DOWN **and** swipe-up (touch on) open the context view scrolled to the current word, which is visibly **brighter** than the surrounding paragraph; (3) UP/DOWN + swipe up/down scroll; (4) **BACK returns to Paused, does NOT exit the app**; (5) START from Paused resumes with the 3-2-1 ramp and the readout clears; (6) with **Touch controls Off**, DOWN→context and BACK→Paused still work by buttons (swipe is a no-op). Use the existing `(:debug)` input trace — **no per-word/persistent `println`** (AR25). Record the result in Completion Notes (mirror 3.3's on-device block). [Source: garmin-ciq-ubuntu-2404-appimage memo; EXPERIENCE.md:131-138,194-202; architecture.md:323]
+
+### Review Findings (code-review 2026-06-28 — 3 layers: Blind / Edge / Acceptance)
+
+Acceptance Auditor: all 4 ACs MET, all constraints PASS (View→CustomMenu redesign judged legitimate). No crash-class findings — the pure layer is clamped and the concrete `CannedWordSource` is fully buffered.
+
+- [x] [Review][Decision→Dismissed] Last-word readout shows "100%" alongside non-zero time-left — resolved 2026-06-28 (Nerya): correct by design. `bookPercent` measures *position*; time-left measures *reading time including the current word*, which still has its beat+bonus to elapse. On-device passed; kept as-is. [PlaybackView.mc:305-308]
+- [x] [Review][Patch] Misleading "runs ONCE per pause" comment on `sumBonusMs` — FIXED 2026-06-28: comment now states it is O(remaining), recomputed on every paused repaint (cheap on the canned source), with the Epic-4 manifest O(1) swap still noted. Comment-only, no behavior change. [PausedLayout.mc:37-42; PlaybackView.mc:301-305]
+- [x] [Review][Defer] Context focus-line lands wrong when a null/unbuffered record precedes the current word — `wrap()` skips null records via `continue`, so `currentLine` stays 0 and the bright current word can open off-screen. [PausedContextView.mc:122,139] — deferred, unreachable under the fully-buffered CannedWordSource; activates with the Epic-4 chunked `BookWordSource`.
+- [x] [Review][Defer] `drawPausedReadout` lacks the null-`currentRecord` guard that `openContextView` has — computes %/time over a possibly-null record. [PlaybackView.mc:294-308 vs :188] — deferred, safe under CannedWordSource; add the guard when a non-buffered source lands (Epic 4).
+- [x] [Review][Defer] `_wpmReadoutUntil` deadline has no `getTimer()` wraparound guard — near the 32-bit wrap the transient WPM flash silently drops. [PlaybackView.mc:160,340] — deferred, pre-existing from Story 3.3 (already tracked in deferred-work.md).
+- [x] [Review][Defer] Context lines wrapped to full diameter may clip at round-screen top/bottom rows — `usable = screenW - 2*MARGIN` is applied to every line; only the centered line has that chord on a round face. [PausedContextView.mc:59,110-154] — deferred, on-device passed; visual polish, revisit if a long paragraph clips.
+
+Dismissed (4, noise/false-positive): `timeRemainingMs` per-word integer truncation [intentional — mirrors the engine's `beatMs()` exactly per spec §5.1, so the estimate matches real playback, not an under-report]; `paragraphStartAtOrBefore` `i>0` word-0-flag conflation [correct result, no consequence]; empty-word invisible-mark [outside the baker's valid input domain — words are non-empty]; `measuringDc` 50px buffer magic constant [measurement APIs don't use buffer height — harmless].
 
 ## Dev Notes
 

@@ -35,8 +35,10 @@ module PausedLayout {
     }
 
     // Σ wordAt(k).bonusMs over [fromIndex, toIndexInclusive], skipping null records
-    // (bounds-check-and-degrade). Runs ONCE per pause over the canned source — paused
-    // is not the hot path. Forward note (Story 4.1): with the manifest, swap this for
+    // (bounds-check-and-degrade). O(remaining): called from drawPausedReadout on EVERY
+    // paused repaint (rewind-while-paused, pop-back-from-context, any requestUpdate) —
+    // cheap on the 228-word canned source, but it is not a once-per-pause memo. Forward
+    // note (Story 4.1): with the manifest, swap this for
     // manifest.totalBonusMs − cumulativeBonusUpTo(index) (O(1)).
     function sumBonusMs(source as BookWordSource, fromIndex as Number, toIndexInclusive as Number) as Number {
         var sum = 0;

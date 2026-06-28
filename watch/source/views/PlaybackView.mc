@@ -299,9 +299,10 @@ class PlaybackView extends WatchUi.View {
         var count = _source.wordCount();
         var pct = PausedLayout.bookPercent(idx, count);
         // wordsRemaining = the current word through the end, inclusive (so a pause on
-        // the last word still reads 1 word / its bonus remaining). The bonus sum runs
-        // ONCE here (paused is not the hot path), NOT per word. Story 4.1 swaps the
-        // sum for the manifest's O(1) cumulative bonus behind PausedLayout.
+        // the last word still reads 1 word / its bonus remaining). The bonus sum is
+        // O(remaining) and recomputed on every paused repaint (cheap on the canned
+        // source). Story 4.1 swaps the sum for the manifest's O(1) cumulative bonus
+        // behind PausedLayout.
         var wordsRemaining = count - idx;
         var bonusRemaining = PausedLayout.sumBonusMs(_source, idx, count - 1);
         var timeLeft = PausedLayout.formatRemaining(
