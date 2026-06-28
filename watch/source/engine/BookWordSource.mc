@@ -13,11 +13,17 @@ import Toybox.Lang;
 //                          that index is out of range or not yet buffered.
 //   prefetchAround(index)→ a hint that reading is near `index`; a chunked source
 //                          uses it to pull neighbouring chunks ahead of time.
+//   chapters()           → the ChapterCatalog (offsets + titles) for the chapter
+//                          card (Story 3.5). The base returns an EMPTY catalog so a
+//                          source with no chapter metadata degrades to "one book, no
+//                          cards" rather than crashing; CannedWordSource overrides it
+//                          from the bundled fixture, ChunkedWordSource (Epic 4) from
+//                          the live manifest — the view code is identical either way.
 //
 // This base class is the typed contract. `FakeWordSource` (Story 3.1, tests) and
 // `ChunkedWordSource` (Story 4.1) both extend it. The base implementations model
 // an empty book so a misconfigured subclass degrades quietly rather than crashing
-// (NFR8/AR24); subclasses MUST override all three.
+// (NFR8/AR24); subclasses MUST override wordCount/wordAt/prefetchAround.
 class BookWordSource {
 
     function initialize() {
@@ -32,5 +38,9 @@ class BookWordSource {
     }
 
     function prefetchAround(index as Number) as Void {
+    }
+
+    function chapters() as ChapterCatalog {
+        return new ChapterCatalog([] as Array<Number>, [] as Array<String>);
     }
 }

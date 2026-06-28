@@ -71,6 +71,14 @@ class PlaybackView extends WatchUi.View {
     // "Visible when you look for it, invisible at reading speed" (DESIGN.md:122).
     private const READOUT_MS = 900;
 
+    // ── chapter card (Story 3.5, AC1) ──
+    // How long an Auto card breathes before flow resumes ("~2 s"; tune on device).
+    // It doubles as the Epic-4 prefetch breath (the prefetch trigger is wired later).
+    private const CHAPTER_CARD_MS = 2000;
+    // Card-screen insets: the title sits at the vertical center where the full
+    // diameter is available, so the guide margin is enough to keep it off the edge.
+    private const CARD_EDGE = 28;
+
     private var _settings as SettingsModel.Settings;
     private var _source as CannedWordSource;
     private var _engine as Reader.ReaderEngine;
@@ -87,6 +95,18 @@ class PlaybackView extends WatchUi.View {
     // Set in stepWpm(); compared against System.getTimer() in onUpdate.
     private var _wpmReadoutUntil as Number;
 
+    // ── chapter-card mode state (Story 3.5) ──
+    // _chapterCard: the card-draw mode is active (engine frozen on the chapter's
+    // first word). _cardedIndex: the word index a card was last raised for, so the
+    // just-resumed chapter-start word does not immediately re-card (the next
+    // chapter's index is naturally distinct). _cardChapterNum/_cardChapterTitle:
+    // the snapshot drawn on the card. The Auto deadline is owned by the one-shot
+    // timer (onCardTimeout), so no separate _cardUntil field is needed.
+    private var _chapterCard as Boolean;
+    private var _cardedIndex as Number;
+    private var _cardChapterNum as Number;
+    private var _cardChapterTitle as String?;
+
     function initialize() {
         View.initialize();
         _settings = new SettingsModel.Settings();
@@ -99,6 +119,10 @@ class PlaybackView extends WatchUi.View {
         _jitterX = 0;
         _jitterY = 0;
         _wpmReadoutUntil = 0;
+        _chapterCard = false;
+        _cardedIndex = -1; // no card raised yet (word 0 is chapter 1 but never cards)
+        _cardChapterNum = 0;
+        _cardChapterTitle = null;
     }
 
     // Auto-play on show so playback is demonstrable without input (Story 3.3 owns
@@ -138,6 +162,13 @@ class PlaybackView extends WatchUi.View {
     // paused branch. Resume re-arms the ramp (engine.play) and the timer. FINISHED
     // is terminal — play() no-ops it, so there is no resume from the end.
     function pauseOrResume() as Void {
+        // START during a chapter card (Auto or Wait) resumes the stream immediately —
+        // the card-aware branch must come first, because the engine is PAUSED behind
+        // the card and would otherwise be treated as a normal paused resume (Story 3.5).
+        if (_chapterCard) {
+            resumeFromCard();
+            return;
+        }
         if (_engine.isPlaying() || _engine.isRamping()) {
             _engine.requestPause();
             WatchUi.requestUpdate();
@@ -152,6 +183,13 @@ class PlaybackView extends WatchUi.View {
     // re-fetch and no drift (engine contract, AC2 "without interrupting the
     // stream") — so NO timer change here. Arm the transient readout and repaint.
     function stepWpm(up as Boolean) as Void {
+        // No WPM change while a card or the Finished screen is up — those modes are
+        // not "playing", and the re-read-is-phone-side contract (UX-DR14) keeps the
+        // end screen from being driven (Story 3.5, Task 8). The readout is also gated
+        // on isPlaying||isRamping, so this is belt-and-braces.
+        if (_chapterCard || _engine.isFinished()) {
+            return;
+        }
         if (up) {
             _engine.stepWpmUp();
         } else {
@@ -168,6 +206,13 @@ class PlaybackView extends WatchUi.View {
     // jitter refresh; if we were already paused there is no pending tick, so this
     // repaint is the one that lands.)
     function rewindOne() as Void {
+        // No rewind out of a chapter card or the Finished screen (Story 3.5, Task 8).
+        // FINISHED is terminal — re-read is a phone-side decision (UX-DR14), which is
+        // the deliberate resolution of deferred-work #107, NOT a missing feature. A
+        // card freezes on a chapter start; rewinding from it would defeat the breath.
+        if (_chapterCard || _engine.isFinished()) {
+            return;
+        }
         _engine.rewind();
         recomputeJitter();
         WatchUi.requestUpdate();
@@ -182,6 +227,12 @@ class PlaybackView extends WatchUi.View {
     // only the read-only line items, never the engine or this view. BACK in the
     // delegate pops back to this still-frame (AC3).
     function openContextView() as Void {
+        // A chapter card pauses the engine behind it, so guard the card explicitly:
+        // the card is not the context affordance (Story 3.5, Task 8). FINISHED is not
+        // paused, so isPaused() already excludes it, but guard it for symmetry.
+        if (_chapterCard || _engine.isFinished()) {
+            return;
+        }
         if (!_engine.isPaused()) {
             return;
         }
@@ -215,7 +266,15 @@ class PlaybackView extends WatchUi.View {
     // accumulation; resolves Story 3.1 deferred #4, architecture AR13). The engine
     // imports no System; the view supplies `now` via System.getTimer().
     function onTimerTick() as Void {
-        _engine.onTick(System.getTimer());
+        var now = System.getTimer();
+        _engine.onTick(now);
+        // Chapter-boundary interception (Story 3.5, AC1): AFTER the engine advanced,
+        // if the now-current word starts a chapter, raise the card. It freezes the
+        // engine and arms its own resume path (Auto timer / Wait START), so we are
+        // done for this tick.
+        if (maybeEnterChapterCard(now)) {
+            return;
+        }
         if (_engine.isPlaying() || _engine.isRamping()) {
             WatchUi.requestUpdate();
             armTimer();
@@ -228,6 +287,68 @@ class PlaybackView extends WatchUi.View {
             recomputeJitter();
             WatchUi.requestUpdate();
         }
+    }
+
+    // ── chapter card lifecycle (Story 3.5, AC1) ──
+
+    // If the engine just advanced (while playing) onto a word that starts a chapter,
+    // enter card mode: snapshot number+title from the source catalog, freeze the
+    // engine ON that word (pauseAtCurrent — instant, so coast can't overshoot the
+    // chapter start), and arm the resume path. Returns true iff a card was raised.
+    // Skips word 0 (the book's own start is never a card) and the already-carded
+    // index (so a just-resumed chapter start does not immediately re-card).
+    private function maybeEnterChapterCard(now as Number) as Boolean {
+        if (_chapterCard || !_engine.isPlaying()) {
+            return false;
+        }
+        var idx = _engine.index();
+        if (idx <= 0 || idx == _cardedIndex) {
+            return false;
+        }
+        var rec = _engine.currentRecord();
+        if (rec == null || (rec.flags & Protocol.FLAG_CHAPTER_START) == 0) {
+            return false;
+        }
+        var cat = _source.chapters();
+        _cardChapterNum = cat.numberForWord(idx);
+        _cardChapterTitle = cat.titleForWord(idx);
+        _cardedIndex = idx;
+        _engine.pauseAtCurrent(); // freeze ON the chapter's first word
+        _chapterCard = true;
+        if (_settings.chapterResume == SettingsModel.CHAPTER_RESUME_AUTO) {
+            armCardTimer(); // breathe ~2 s, then resumeFromCard
+        } else {
+            _timer.stop();  // Wait: hold until START (no pending tick to run)
+        }
+        recomputeJitter(); // a fresh still frame for the card
+        WatchUi.requestUpdate();
+        return true;
+    }
+
+    // One-shot Auto-card timer. Reuses the single _timer instance (the playback loop
+    // is stopped while the card is up), so there is no second Timer to leak.
+    private function armCardTimer() as Void {
+        _timer.start(method(:onCardTimeout), CHAPTER_CARD_MS, false);
+    }
+
+    // Auto card elapsed — resume the stream (no-op if START already resumed it).
+    function onCardTimeout() as Void {
+        if (!_chapterCard) {
+            return;
+        }
+        resumeFromCard();
+    }
+
+    // Leave card mode and resume playback. play() (PAUSED -> ramp -> playing) is the
+    // ONLY lever that re-anchors the engine's accumulator, so the ~2 s card does not
+    // trigger onTick's catch-up burst; the 3-beat ramp is the intended "breath" on
+    // chapter resume (EXPERIENCE.md:85). _cardedIndex stays set so this chapter-start
+    // word does not immediately re-card.
+    function resumeFromCard() as Void {
+        _chapterCard = false;
+        _engine.play(System.getTimer());
+        armTimer();
+        WatchUi.requestUpdate();
     }
 
     private function armTimer() as Void {
@@ -247,6 +368,21 @@ class PlaybackView extends WatchUi.View {
 
         var w = dc.getWidth();
         var h = dc.getHeight();
+
+        // Chapter card (Story 3.5, AC1) and Finished screen (AC2) are two more
+        // early-return draw modes — like the ramp / paused / null-record branches —
+        // because both must coordinate the engine + the timer loop this view owns.
+        // They intercede ONLY at a chapter boundary and at end-of-book; normal
+        // playback below is untouched (AC4).
+        if (_chapterCard) {
+            drawChapterCard(dc, w, h);
+            return;
+        }
+        if (_engine.isFinished()) {
+            drawFinished(dc, w, h);
+            return;
+        }
+
         var anchorCol = OrpLayout.anchorX(w, _settings.anchorPct) + _jitterX;
         var cy = h / 2 + _jitterY;
 
@@ -346,6 +482,86 @@ class PlaybackView extends WatchUi.View {
         var ry = h * 3 / 4 + _jitterY; // lower third, below the bottom split hairline
         dc.drawText(rx, ry, Graphics.FONT_SYSTEM_TINY, _engine.wpm().toString() + " wpm",
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+    }
+
+    // Chapter card (AC1). Drawn ONLY in card mode (onUpdate returns before the word
+    // branches). "Chapter N" meta label, the chapter title in the chapter-title role
+    // (Ink, the largest native face that fits on one line — DESIGN 28/700; the true
+    // bold Atkinson BMFont is the same deferred font-swap behind fontFor, native faces
+    // have no 700 weight), and the book-progress percent beneath in Ink-Dim. Centered
+    // on the anchor band where the round face is widest; the whole card rides the same
+    // burn-in jitter as the rest of the composition.
+    private function drawChapterCard(dc as Graphics.Dc, w as Number, h as Number) as Void {
+        var cx = w / 2 + _jitterX;
+        var cy = h / 2 + _jitterY;
+        var title = _cardChapterTitle == null ? "" : _cardChapterTitle;
+        var usable = w - 2 * CARD_EDGE;
+
+        var labelFont = Graphics.FONT_SYSTEM_TINY; // watch-meta
+        var titleFont = fitTitleFont(dc, title, usable);
+        var labelH = dc.getFontHeight(labelFont);
+        var titleH = dc.getFontHeight(titleFont);
+        var gap = labelH / 2;
+
+        // "Chapter N" label above the title (Ink-Dim meta).
+        dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy - titleH / 2 - gap, labelFont,
+            "Chapter " + _cardChapterNum.toString(),
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // The chapter title — the one place bold is allowed (here: the largest native
+        // face), in Ink (focal text on Void).
+        dc.setColor(COLOR_INK, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy, titleFont, title,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // Progress beneath, Ink-Dim (reuse PausedLayout.bookPercent — don't reinvent).
+        var pct = PausedLayout.bookPercent(_engine.index(), _source.wordCount());
+        dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy + titleH / 2 + gap, labelFont, pct.toString() + "%",
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+    }
+
+    // Finished screen (AC2). Replaces the frozen last word with an explicit end —
+    // never a silent stop. Ink-Dim, status-view style, centered. BACK exits (the
+    // delegate lets the system handle ACTION_EXIT); there is intentionally NO
+    // rewind-into-text (UX-DR14, resolves deferred #107). The stat is total content
+    // reading time, computed purely (the wall-clock "across N days" half lands with
+    // Story 3.6 persistence — pass `days` then instead of null).
+    private function drawFinished(dc as Graphics.Dc, w as Number, h as Number) as Void {
+        var cx = w / 2;
+        var cy = h / 2;
+        dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(cx, cy, Graphics.FONT_SYSTEM_SMALL,
+            StatusLayout.formatFinished(totalReadingMs(), null),
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+    }
+
+    // Total content reading time in ms (Epic-3 Finished stat): wordCount * beat +
+    // Σ bonus over the whole book, mirroring the paused-readout math exactly. The
+    // O(book) bonus sum runs ONCE on the Finished frame (no repaint loop while
+    // finished), cheap on the 228-word canned source; Story 4.1 swaps it for the
+    // manifest's O(1) total behind PausedLayout. Empty book degrades to 0.
+    private function totalReadingMs() as Number {
+        var count = _source.wordCount();
+        if (count <= 0) {
+            return 0;
+        }
+        return count * (60000 / _engine.wpm())
+            + PausedLayout.sumBonusMs(_source, 0, count - 1);
+    }
+
+    // The largest ramp face whose whole-width fits `usable` on one line (chapter
+    // title fit-to-width, starting from the LARGEST face — independent of the
+    // reading fontSize). Falls back to the smallest ramp font if even that overflows
+    // (best effort, never truncate). A few measurements, only on card entry.
+    private function fitTitleFont(dc as Graphics.Dc, text as String, usable as Number) as Graphics.FontType {
+        for (var idx = 0; idx < RAMP_LENGTH - 1; idx++) {
+            if (!OrpLayout.needsMarginClamp(dc.getTextWidthInPixels(text, fontFor(idx)), usable)) {
+                return fontFor(idx);
+            }
+        }
+        return fontFor(RAMP_LENGTH - 1);
     }
 
     // Split guide marks (AC2): split hairlines above/below in Ink-Faint with a gap

@@ -23,6 +23,12 @@ module SettingsModel {
     const HAND_RIGHT = 0;    // default
     const HAND_LEFT = 1;
 
+    // ── chapterResume (Story 3.5, AC1) — what a chapter card does after it shows.
+    // Auto: card breathes ~2 s then flow resumes; Wait: card holds until START.
+    // Read by PlaybackView's chapter-card mode here; the menu UI is Story 3.8.
+    const CHAPTER_RESUME_AUTO = 0;   // default
+    const CHAPTER_RESUME_WAIT = 1;
+
     // ── per-device defaults (AC1) ──
     const DEFAULT_WPM = 250;
     const DEFAULT_PAUSE_MODE = PAUSE_COAST;
@@ -32,6 +38,7 @@ module SettingsModel {
     const DEFAULT_FOCUS_HIGHLIGHT = true;
     const DEFAULT_PHANTOM_WORDS = true;
     const DEFAULT_ANCHOR_PCT = 35;        // ORP anchor, percent from the left edge
+    const DEFAULT_CHAPTER_RESUME = CHAPTER_RESUME_AUTO;
 
     // WPM clamp range (addendum #2 — resolved value, supersedes stale epics FR3).
     const WPM_MIN = 10;
@@ -46,6 +53,7 @@ module SettingsModel {
     const KEY_FOCUS_HIGHLIGHT = "focusHighlight";
     const KEY_PHANTOM_WORDS = "phantomWords";
     const KEY_ANCHOR_PCT = "anchorPct";
+    const KEY_CHAPTER_RESUME = "chapterResume";
 
     class Settings {
         public var wpm as Number;
@@ -56,6 +64,7 @@ module SettingsModel {
         public var focusHighlight as Boolean;
         public var phantomWords as Boolean;
         public var anchorPct as Number;
+        public var chapterResume as Number;
 
         // Pure default construction — NO Storage access (AC1). Persisted values
         // are layered on afterwards via loadFrom(), never in the default path.
@@ -68,6 +77,7 @@ module SettingsModel {
             focusHighlight = DEFAULT_FOCUS_HIGHLIGHT;
             phantomWords = DEFAULT_PHANTOM_WORDS;
             anchorPct = DEFAULT_ANCHOR_PCT;
+            chapterResume = DEFAULT_CHAPTER_RESUME;
         }
 
         // Apply a persisted dict over the current values. Pure and Storage-free
@@ -82,6 +92,7 @@ module SettingsModel {
             wpm = clampWpm(readNumber(d, KEY_WPM, wpm));
             pauseMode = readEnum(d, KEY_PAUSE_MODE, pauseMode, PAUSE_COAST, PAUSE_INSTANT);
             handedness = readEnum(d, KEY_HANDEDNESS, handedness, HAND_RIGHT, HAND_LEFT);
+            chapterResume = readEnum(d, KEY_CHAPTER_RESUME, chapterResume, CHAPTER_RESUME_AUTO, CHAPTER_RESUME_WAIT);
             fontSize = readNonNegative(d, KEY_FONT_SIZE, fontSize);
             anchorPct = readPercent(d, KEY_ANCHOR_PCT, anchorPct);
             touchControls = readBoolean(d, KEY_TOUCH_CONTROLS, touchControls);
@@ -99,7 +110,8 @@ module SettingsModel {
                 KEY_HANDEDNESS => handedness,
                 KEY_FOCUS_HIGHLIGHT => focusHighlight,
                 KEY_PHANTOM_WORDS => phantomWords,
-                KEY_ANCHOR_PCT => anchorPct
+                KEY_ANCHOR_PCT => anchorPct,
+                KEY_CHAPTER_RESUME => chapterResume
             };
         }
 

@@ -113,6 +113,21 @@ module Reader {
             }
         }
 
+        // Instant, mode-INDEPENDENT freeze on the current word (Story 3.5, AC1). The
+        // chapter card must stop ON the chapter's first word the instant it appears;
+        // requestPause() in PAUSE_COAST would coast to the next sentence end and
+        // overrun it. Reuses the existing instant-pause path (finalizePause)
+        // unconditionally. No-op unless PLAYING or RAMP (IDLE/PAUSED/FINISHED stay
+        // put). Resume is plain play(now), the only lever that re-anchors
+        // _lastAdvance — so the ~2 s card does NOT trigger onTick's catch-up burst.
+        // Engine stays Lang-only.
+        function pauseAtCurrent() as Void {
+            if (_state != STATE_PLAYING && _state != STATE_RAMP) {
+                return;
+            }
+            finalizePause();
+        }
+
         // Stackable sentence rewind with auto-pause (AC6). Moves to the start of the
         // current sentence; if already at a sentence start, steps back to the
         // previous sentence. Clamps at word 0. Always auto-pauses.

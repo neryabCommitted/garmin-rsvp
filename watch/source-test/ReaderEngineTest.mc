@@ -89,6 +89,11 @@ function settingsDefaultsAreStorageFree(logger as Test.Logger) as Boolean {
     if (!s.focusHighlight) { logger.error("default focusHighlight"); return false; }
     if (!s.phantomWords) { logger.error("default phantomWords"); return false; }
     if (s.anchorPct != 35) { logger.error("default anchorPct"); return false; }
+
+    // Story 3.5: chapterResume enum + default (Auto). Read by the chapter card.
+    if (SettingsModel.CHAPTER_RESUME_AUTO != 0) { logger.error("CHAPTER_RESUME_AUTO"); return false; }
+    if (SettingsModel.CHAPTER_RESUME_WAIT != 1) { logger.error("CHAPTER_RESUME_WAIT"); return false; }
+    if (s.chapterResume != SettingsModel.CHAPTER_RESUME_AUTO) { logger.error("default chapterResume"); return false; }
     return true;
 }
 
@@ -102,7 +107,8 @@ function settingsApplyDictIsPureAndValidated(logger as Test.Logger) as Boolean {
     // Valid values apply.
     s.applyDict({
         "wpm" => 600, "pauseMode" => 1, "touchControls" => false, "fontSize" => 2,
-        "handedness" => 1, "focusHighlight" => false, "phantomWords" => false, "anchorPct" => 50
+        "handedness" => 1, "focusHighlight" => false, "phantomWords" => false, "anchorPct" => 50,
+        "chapterResume" => 1
     });
     if (s.wpm != 600) { logger.error("apply wpm"); return false; }
     if (s.pauseMode != SettingsModel.PAUSE_INSTANT) { logger.error("apply pauseMode"); return false; }
@@ -112,22 +118,26 @@ function settingsApplyDictIsPureAndValidated(logger as Test.Logger) as Boolean {
     if (s.focusHighlight) { logger.error("apply focusHighlight"); return false; }
     if (s.phantomWords) { logger.error("apply phantomWords"); return false; }
     if (s.anchorPct != 50) { logger.error("apply anchorPct"); return false; }
+    if (s.chapterResume != SettingsModel.CHAPTER_RESUME_WAIT) { logger.error("apply chapterResume"); return false; }
 
     // Out-of-range / malformed values degrade to the current value (NFR8/AR24).
     var s2 = new SettingsModel.Settings();
     s2.applyDict({
-        "wpm" => 99999, "pauseMode" => 7, "anchorPct" => -5, "fontSize" => -1, "handedness" => "left"
+        "wpm" => 99999, "pauseMode" => 7, "anchorPct" => -5, "fontSize" => -1, "handedness" => "left",
+        "chapterResume" => 9
     });
     if (s2.wpm != SettingsModel.WPM_MAX) { logger.error("wpm not clamped"); return false; }
     if (s2.pauseMode != SettingsModel.PAUSE_COAST) { logger.error("bad pauseMode not degraded"); return false; }
     if (s2.anchorPct != 35) { logger.error("bad anchorPct not degraded"); return false; }
     if (s2.fontSize != 0) { logger.error("negative fontSize not degraded"); return false; }
     if (s2.handedness != SettingsModel.HAND_RIGHT) { logger.error("non-number handedness not degraded"); return false; }
+    if (s2.chapterResume != SettingsModel.CHAPTER_RESUME_AUTO) { logger.error("bad chapterResume not degraded"); return false; }
 
     // toDict round-trips through applyDict.
     var s3 = new SettingsModel.Settings();
     s3.applyDict(s.toDict());
     if (s3.wpm != 600 || s3.anchorPct != 50 || s3.pauseMode != 1) { logger.error("toDict round-trip"); return false; }
+    if (s3.chapterResume != SettingsModel.CHAPTER_RESUME_WAIT) { logger.error("toDict round-trip chapterResume"); return false; }
     return true;
 }
 
@@ -400,5 +410,63 @@ function engineNaturalFinish(logger as Test.Logger) as Boolean {
     ReaderEngineTestSupport.stepDue(engine); // display last word elapses -> FINISHED
     if (!engine.isFinished()) { logger.error("did not finish at book end"); return false; }
     if (engine.lastTransition() != Reader.TRANSITION_FINISHED) { logger.error("no FINISHED transition"); return false; }
+    return true;
+}
+
+// ── Story 3.5: pauseAtCurrent() — instant, mode-independent chapter-card freeze ─
+
+(:test)
+function enginePauseAtCurrentFreezesInstantlyEvenInCoast(logger as Test.Logger) as Boolean {
+    // Default engine is PAUSE_COAST. word 6 is mid sentence 2 (starts at 5, ends 9):
+    // requestPause() would coast to 9, but pauseAtCurrent() must freeze ON word 6 —
+    // the chapter card needs the chapter's FIRST word, not the next sentence end.
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(6);
+    if (engine.pauseMode() != SettingsModel.PAUSE_COAST) { logger.error("setup: not coast"); return false; }
+    engine.pauseAtCurrent();
+    if (!engine.isPaused()) { logger.error("pauseAtCurrent did not pause"); return false; }
+    if (engine.index() != 6) { logger.error("pauseAtCurrent overran the current word"); return false; }
+    if (engine.lastTransition() != Reader.TRANSITION_PAUSE) { logger.error("no PAUSE transition"); return false; }
+    return true;
+}
+
+(:test)
+function enginePauseAtCurrentResumeReAnchorsNoCatchUp(logger as Test.Logger) as Boolean {
+    // Resume from a card is plain play(now): it re-arms the 3-beat ramp AND re-anchors
+    // the accumulator to `now`, so a long card gap does NOT burst through the text.
+    var engine = ReaderEngineTestSupport.driveToPlayingIndexNew(6);
+    engine.pauseAtCurrent();
+    var bigNow = 5000000; // a far-future resume timestamp (the ~2 s card + clock)
+    engine.play(bigNow);
+    if (!engine.isRamping() || engine.rampRemaining() != 3) { logger.error("resume did not re-arm ramp"); return false; }
+    if (engine.lastAdvance() != bigNow) { logger.error("accumulator not re-anchored to now (catch-up risk)"); return false; }
+    // One due tick advances exactly one ramp beat (no burst), staying on word 6.
+    ReaderEngineTestSupport.stepDue(engine);
+    if (engine.rampRemaining() != 2) { logger.error("burst: advanced more than one beat"); return false; }
+    if (engine.index() != 6) { logger.error("resume moved off the carded word"); return false; }
+    return true;
+}
+
+(:test)
+function enginePauseAtCurrentNoOpFromIdlePausedFinished(logger as Test.Logger) as Boolean {
+    // IDLE: nothing playing -> no state change, no transition.
+    var idle = ReaderEngineTestSupport.newEngine();
+    idle.pauseAtCurrent();
+    if (idle.state() != Reader.STATE_IDLE) { logger.error("pauseAtCurrent left IDLE"); return false; }
+    if (idle.lastTransition() != Reader.TRANSITION_NONE) { logger.error("IDLE emitted a transition"); return false; }
+
+    // PAUSED: already frozen -> no-op (index unchanged, still paused).
+    var paused = ReaderEngineTestSupport.driveToPlayingIndexNew(3);
+    paused.setPauseMode(SettingsModel.PAUSE_INSTANT);
+    paused.requestPause();
+    if (!paused.isPaused() || paused.index() != 3) { logger.error("setup: not paused at 3"); return false; }
+    paused.pauseAtCurrent();
+    if (!paused.isPaused() || paused.index() != 3) { logger.error("pauseAtCurrent disturbed PAUSED"); return false; }
+
+    // FINISHED: terminal -> no-op (stays finished).
+    var finished = ReaderEngineTestSupport.driveToPlayingIndexNew(9);
+    ReaderEngineTestSupport.stepDue(finished); // -> FINISHED
+    if (!finished.isFinished()) { logger.error("setup: not finished"); return false; }
+    finished.pauseAtCurrent();
+    if (!finished.isFinished()) { logger.error("pauseAtCurrent disturbed FINISHED"); return false; }
     return true;
 }
