@@ -4,7 +4,7 @@ baseline_commit: 355eecb4aeee3b21f43b12addc83e4b169feecf7
 
 # Story 3.5: Chapter card, Finished screen & status-view shells
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -193,3 +193,18 @@ claude-opus-4-8 (Amelia / dev-story), 2026-06-28.
 ## Change Log
 
 - 2026-06-28 — Story 3.5 dev-story (Amelia): chapter card + Finished screen + 4 render-only status shells (FR5/FR6). New pure modules `ChapterCatalog` + `StatusLayout`; new `StatusView`; `chapterResume` setting; `ReaderEngine.pauseAtCurrent()`; `BookWordSource.chapters()` seam fed by `CannedWordSource` from the committed fixture. Resolves deferred-work #107 (no FINISHED rewind, by decision). 73/73 host tests @ Strict L3 (+10); release + unit-test builds clean. Status → review; on-device Fenix 8 check PENDING human.
+
+## Review Findings
+
+Code review 2026-06-28 (Amelia) — 3 adversarial layers (Blind Hunter / Edge Case Hunter / Acceptance Auditor) over commit `339dbba` vs baseline `355eecb`. **All 4 ACs MET** (auditor), on-device PASS confirmed, 73/73 host tests. 2 patches, 6 deferred, 8 dismissed (no decision-needed, no Critical/High reachable in Epic 3).
+
+- [x] [Review][Patch] Finished screen ignores burn-in jitter — `drawFinished` is the only draw path that omits `+_jitterX/+_jitterY`; it is also the longest-lived static frame (persists until BACK) on AMOLED. [`watch/source/views/PlaybackView.mc:531-538`] — FIXED 2026-06-28: `drawFinished` now applies the session jitter offset like every other draw path.
+- [x] [Review][Patch] Auto chapter card stranded as a Wait card after a hide/show — `onHide` stops the one-shot card timer; on re-show the carded engine is PAUSED, so `onShow` re-arms nothing and `_chapterCard` stays true with no Auto resume timer (a system overlay/notification during the ~2 s window converts Auto→Wait until START). [`watch/source/views/PlaybackView.mc:131-147`] — FIXED 2026-06-28: `onShow` re-arms the Auto card timer when shown while `_chapterCard && chapterResume==AUTO`.
+- [x] [Review][Defer] Catch-up burst overshoots/skips a chapter boundary — `maybeEnterChapterCard` inspects only the landed `_engine.index()` after `onTick`; a delayed tick advancing >1 word (up to `CATCHUP_CAP`=4) steps OVER a chapter-start word and raises no card. Dev-documented limitation; unreachable at 1-word/tick (cards verified at 81 & 170 on device); more likely with Epic-4 buffering stalls. [`watch/source/views/PlaybackView.mc:300-326`] — deferred to Epic 4
+- [x] [Review][Defer] Chapter start reached during the resume RAMP is not carded — the card gate is `!_engine.isPlaying()`, excluding `STATE_RAMP`; a chapter whose start falls within the 3-beat resume ramp would be silently skipped. Unreachable in the canned source (chapters 81/170 are far past the only ramp at book start, where word 0 never cards). [`watch/source/views/PlaybackView.mc:300-303`] — deferred to Epic 4
+- [x] [Review][Defer] `_cardedIndex` is never reset on rewind/finish — rewinding back across a boundary then reading forward re-hits `idx == _cardedIndex` and shows no chapter card on the re-cross (marginal UX). [`watch/source/views/PlaybackView.mc:208-219, 300-315`] — deferred to Epic 4
+- [x] [Review][Defer] Catalog/Finished hardening for the live manifest — final-word-is-chapter-start → card-then-finish; `offsets[0] != 0` unenforced; empty-catalog-but-FLAG_CHAPTER_START renders "Chapter 1"/blank; `count()` silently truncates to the shorter of offsets/titles; `totalReadingMs` 32-bit overflow on multi-million-word books. All guarded-by-construction in the 228-word canned source; reachable only with the Epic-4 `ChunkedWordSource`. [`watch/source/views/ChapterCatalog.mc`, `watch/source/views/PlaybackView.mc:545-552`] — deferred to Epic 4
+- [x] [Review][Defer] `StatusView` render-only shell edges — long status sentences have no max-lines/vertical clamp (`drawCenteredWrapped` can push lines off a round face) nor horizontal fit; Buffering "Loading…" (steady) vs "Loading..." (dot cycle) disagree and the 0-dot branch is dead live; `splitWords` is O(n²) char-concat re-run every Buffering repaint. No Epic-3 trigger — shells aren't shown until Epic 4 wires triggers + on-device verification. [`watch/source/views/StatusView.mc`] — deferred to Epic 4
+- [x] [Review][Defer] Finished stat single-line non-wrap — `drawFinished` draws one `FONT_SYSTEM_SMALL` line; fits the Epic-3 "Finished. 6h 41m." (on-device PASS) but risks horizontal clip when Story 3.6 adds the "across N days" tail. [`watch/source/views/PlaybackView.mc:531-538`] — deferred to Story 3.6
+
+**Dismissed (8):** `totalReadingMs` div-by-zero (false positive — `_wpm` clamped ≥ `WPM_MIN`, never 0, per `beatMs()`); `totalReadingMs` integer-division "rounding" and "stat is fiction if WPM changed" (by spec — current-wpm content-time estimate that mirrors the engine's per-word truncation exactly; wall-clock is Story 3.6); `fitTitleFont` font-ordering off-by-one (false positive — `fontFor(0)=LARGE … (4)=XTINY`, loop returns largest-that-fits, fallback smallest); `onCardTimeout` stale fire (handled — `!_chapterCard` guard + single Timer instance reschedule); `_cardChapterNum = 0` dead default (benign — always set before the card draws); `numberForWord` "clamps to 1" phrasing (implementation correct); `chapters()` null guard (non-nullable return type under Strict).

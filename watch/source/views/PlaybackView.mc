@@ -135,7 +135,16 @@ class PlaybackView extends WatchUi.View {
         // onShow again — guarding on STATE_IDLE keeps it PAUSED (AC3) instead of
         // resuming. Becoming visible while live re-arms the loop; PAUSED/FINISHED
         // stay frozen with no timer. Pre-aligns with Story 3.6 "resume lands Paused".
-        if (_engine.state() == Reader.STATE_IDLE) {
+        if (_chapterCard) {
+            // Shown again while a chapter card is up (e.g. a system overlay/notification
+            // covered then revealed us mid-breath). onHide stopped the timer and the
+            // engine is PAUSED behind the card, so neither branch below would re-arm it
+            // — an Auto card would silently become a Wait card. Re-arm the Auto breath;
+            // a Wait card legitimately holds for START (Story 3.5, AC1).
+            if (_settings.chapterResume == SettingsModel.CHAPTER_RESUME_AUTO) {
+                armCardTimer();
+            }
+        } else if (_engine.state() == Reader.STATE_IDLE) {
             _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
             armTimer();
         } else if (_engine.isPlaying() || _engine.isRamping()) {
@@ -529,8 +538,12 @@ class PlaybackView extends WatchUi.View {
     // reading time, computed purely (the wall-clock "across N days" half lands with
     // Story 3.6 persistence — pass `days` then instead of null).
     private function drawFinished(dc as Graphics.Dc, w as Number, h as Number) as Void {
-        var cx = w / 2;
-        var cy = h / 2;
+        // Ride the same per-session burn-in jitter as every other draw path (word,
+        // guides, card, readouts). The Finished frame is the longest-lived static
+        // screen (it holds until BACK), so omitting the offset is the worst place to
+        // skip burn-in mitigation on true-black AMOLED.
+        var cx = w / 2 + _jitterX;
+        var cy = h / 2 + _jitterY;
         dc.setColor(COLOR_INK_DIM, Graphics.COLOR_TRANSPARENT);
         dc.drawText(cx, cy, Graphics.FONT_SYSTEM_SMALL,
             StatusLayout.formatFinished(totalReadingMs(), null),
