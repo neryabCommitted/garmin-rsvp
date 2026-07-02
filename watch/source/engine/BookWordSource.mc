@@ -19,6 +19,12 @@ import Toybox.Lang;
 //                          cards" rather than crashing; CannedWordSource overrides it
 //                          from the bundled fixture, ChunkedWordSource (Epic 4) from
 //                          the live manifest — the view code is identical either way.
+//   bookId()             → the book's identity (its content fingerprint) keying the
+//                          per-book position record (Story 3.6). The base returns ""
+//                          so a source with no identity gets a stable empty-id key
+//                          rather than crashing — same degrade-quietly posture as
+//                          chapters(); CannedWordSource overrides it from the fixture,
+//                          ChunkedWordSource (Epic 4) from the live manifest.
 //
 // This base class is the typed contract. `FakeWordSource` (Story 3.1, tests) and
 // `ChunkedWordSource` (Story 4.1) both extend it. The base implementations model
@@ -42,5 +48,9 @@ class BookWordSource {
 
     function chapters() as ChapterCatalog {
         return new ChapterCatalog([] as Array<Number>, [] as Array<String>);
+    }
+
+    function bookId() as String {
+        return "";
     }
 }

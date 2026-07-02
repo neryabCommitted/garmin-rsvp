@@ -150,6 +150,30 @@ module Reader {
             setTransition(TRANSITION_REWIND);
         }
 
+        // Restore/reposition primitive (Story 3.6, AC2). Lands the engine PAUSED
+        // on `index`, clamped to [0, wordCount - 1] — at-or-before the last word,
+        // never past it. This is the general reposition rewind() is not: rewind
+        // only lands on sentence starts. Landing PAUSED lets the view's existing
+        // onShow STATE_IDLE guard keep a restored engine frozen (resume lands
+        // Paused) with zero onShow change. Unlike rewind() it emits NO transition:
+        // seek is a restore, not a user action — it must not trip a commit of its
+        // own. Empty book → no-op, stay IDLE (nothing to restore onto). Resume is
+        // plain play(now), which re-anchors the accumulator (no catch-up burst).
+        function seekTo(index as Number) as Void {
+            var count = _source.wordCount();
+            if (count <= 0) {
+                return;
+            }
+            var target = index;
+            if (target < 0) { target = 0; }
+            if (target > count - 1) { target = count - 1; }
+            _index = target;
+            _state = STATE_PAUSED;
+            _pausePending = false;
+            _source.prefetchAround(_index);
+            _currentDuration = computeDuration();
+        }
+
         // Drive time forward. Advances as many beats/words as are due, capped at
         // CATCHUP_CAP per call. NEVER assigns `lastAdvance = now` on the normal
         // path — only `+= duration` (drift-free, AR13). The two exceptions are a

@@ -35,6 +35,14 @@ class CannedWordSource extends BookWordSource {
         "III. What the Tide Returned"
     ];
 
+    // The dev book's identity = its content fingerprint (8 lowercase hex,
+    // Protocol.FINGERPRINT_LENGTH), verbatim from the committed fixture
+    // companion/test/fixtures/streams/dev_sample_book.manifest.json (`fp`).
+    // Regenerate from that fixture if it changes — same drift contract as
+    // WORD_COUNT / CHAPTER_OFFSETS above. Keys the pos_<bookId> position record
+    // (Story 3.6); Epic 4's ChunkedWordSource reads it from the live manifest.
+    private const BOOK_FINGERPRINT = "4bd588b9";
+
     private var _records as Array<StreamDecoder.WordRecord>;
     private var _chapters as ChapterCatalog;
 
@@ -86,5 +94,10 @@ class CannedWordSource extends BookWordSource {
     // The bundled chapter metadata (Story 3.5). Built once in initialize().
     function chapters() as ChapterCatalog {
         return _chapters;
+    }
+
+    // The book identity keying the position record (Story 3.6).
+    function bookId() as String {
+        return BOOK_FINGERPRINT;
     }
 }

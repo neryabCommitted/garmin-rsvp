@@ -413,6 +413,84 @@ function engineNaturalFinish(logger as Test.Logger) as Boolean {
     return true;
 }
 
+// ── Story 3.6: seekTo() — the restore/reposition primitive ───────────────────
+
+(:test)
+function engineSeekToLandsPausedAndClamps(logger as Test.Logger) as Boolean {
+    // From IDLE: lands PAUSED on the exact index with the word's duration ready
+    // (word 2 has bonus 100 → 60000/250 + 100 = 340).
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.seekTo(2);
+    if (!engine.isPaused()) { logger.error("seekTo did not land PAUSED"); return false; }
+    if (engine.index() != 2) { logger.error("seekTo missed the index"); return false; }
+    if (engine.currentDuration() != 340) { logger.error("seekTo did not recompute duration"); return false; }
+    // Clamp below 0 → 0.
+    engine.seekTo(-5);
+    if (engine.index() != 0 || !engine.isPaused()) { logger.error("seekTo below 0 not clamped"); return false; }
+    // Clamp above count-1 → count-1 (at-or-before the last word, never past).
+    engine.seekTo(500);
+    if (engine.index() != 9 || !engine.isPaused()) { logger.error("seekTo past end not clamped to last word"); return false; }
+    return true;
+}
+
+(:test)
+function engineSeekToFromPlayingAndFinished(logger as Test.Logger) as Boolean {
+    // From PLAYING: freezes PAUSED at the target.
+    var playing = ReaderEngineTestSupport.driveToPlayingIndexNew(4);
+    playing.seekTo(2);
+    if (!playing.isPaused() || playing.index() != 2) { logger.error("seekTo from PLAYING"); return false; }
+    // From FINISHED: seek repositions out of the terminal state (restore-after-
+    // finish relaunch lands sanely, never past the end).
+    var finished = ReaderEngineTestSupport.driveToPlayingIndexNew(9);
+    ReaderEngineTestSupport.stepDue(finished);
+    if (!finished.isFinished()) { logger.error("setup: not finished"); return false; }
+    finished.seekTo(3);
+    if (!finished.isPaused() || finished.index() != 3) { logger.error("seekTo from FINISHED"); return false; }
+    return true;
+}
+
+(:test)
+function engineSeekToEmptyBookIsNoOp(logger as Test.Logger) as Boolean {
+    // An empty book has no word to restore onto — stay IDLE at 0 (the engine's
+    // empty-book posture, same as play()).
+    var engine = new Reader.ReaderEngine(new FakeWordSource([] as Array<StreamDecoder.WordRecord>), 250, SettingsModel.PAUSE_COAST);
+    engine.seekTo(3);
+    if (engine.state() != Reader.STATE_IDLE) { logger.error("empty-book seekTo left IDLE"); return false; }
+    if (engine.index() != 0) { logger.error("empty-book seekTo moved index"); return false; }
+    return true;
+}
+
+(:test)
+function engineSeekToEmitsNoTransition(logger as Test.Logger) as Boolean {
+    // seekTo is a RESTORE, not a user transition — it must not trip a
+    // commitPosition of its own (Story 3.6 restore-loop guard).
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.seekTo(5);
+    if (engine.lastTransition() != Reader.TRANSITION_NONE) { logger.error("seekTo from IDLE emitted a transition"); return false; }
+    // And it leaves an existing sticky transition untouched.
+    var rewound = ReaderEngineTestSupport.driveToPlayingIndexNew(7);
+    rewound.rewind(); // sticky TRANSITION_REWIND
+    rewound.seekTo(2);
+    if (rewound.lastTransition() != Reader.TRANSITION_REWIND) { logger.error("seekTo overwrote lastTransition"); return false; }
+    return true;
+}
+
+(:test)
+function engineSeekToThenPlayReRampsNoCatchUp(logger as Test.Logger) as Boolean {
+    // After a restore, play(now) re-arms the 3-beat ramp AND re-anchors the
+    // accumulator to `now` — a relaunch minutes later must not catch-up burst.
+    var engine = ReaderEngineTestSupport.newEngine();
+    engine.seekTo(5);
+    var bigNow = 7777777;
+    engine.play(bigNow);
+    if (!engine.isRamping() || engine.rampRemaining() != 3) { logger.error("play after seekTo did not re-ramp"); return false; }
+    if (engine.lastAdvance() != bigNow) { logger.error("accumulator not re-anchored (catch-up risk)"); return false; }
+    ReaderEngineTestSupport.stepDue(engine);
+    if (engine.rampRemaining() != 2) { logger.error("burst: advanced more than one beat"); return false; }
+    if (engine.index() != 5) { logger.error("play after seekTo moved off the restored word"); return false; }
+    return true;
+}
+
 // ── Story 3.5: pauseAtCurrent() — instant, mode-independent chapter-card freeze ─
 
 (:test)

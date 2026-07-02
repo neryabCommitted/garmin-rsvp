@@ -30,6 +30,12 @@ class PaceTurnerApp extends Application.AppBase {
     private var _lastEncoding as String;
     private var _resetArmedAt as Number?;
 
+    // The constructed playback view (Story 3.6): held so onStop can route the
+    // last catchable exit save through the view's SyncManager. App→View strong
+    // ref is fine — the App is the GC root and the view never references the
+    // App back (no cycle, AR15).
+    private var _playbackView as PlaybackView?;
+
     // Counter generation, bumped on every reset: ack listener callbacks from
     // before a reset are discarded so a straddling ack cannot skew the fresh
     // window (Run B's display showed A leading V exactly this way).
@@ -46,6 +52,7 @@ class PaceTurnerApp extends Application.AppBase {
         _lastError = null;
         _lastEncoding = "?";
         _resetArmedAt = null;
+        _playbackView = null;
         _gen = 0;
     }
 
@@ -75,6 +82,13 @@ class PaceTurnerApp extends Application.AppBase {
         } catch (e) {
             System.println("GateV2: evidence persist failed");
         }
+        // Story 3.6 (AC1): best-effort position force-save on the last catchable
+        // exit hook. The abrupt carousel-kill does NOT reliably reach onStop
+        // (UX-DR13 — no graceful-exit assumption); durability for that case
+        // comes from the per-transition force-saves inside PlaybackView.
+        if (_playbackView != null) {
+            (_playbackView as PlaybackView).commitOnStop();
+        }
     }
 
     function getInitialView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
@@ -87,6 +101,7 @@ class PaceTurnerApp extends Application.AppBase {
         // path (no UI binding) and is left intact as run evidence. BACK still exits
         // to the watch face: the delegate returns false for KEY_ESC.
         var view = new PlaybackView();
+        _playbackView = view; // held for the onStop exit save (Story 3.6)
         return [view, new PlaybackDelegate(view)] as [WatchUi.Views, WatchUi.InputDelegates];
     }
 
