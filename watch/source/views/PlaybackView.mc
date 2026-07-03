@@ -82,6 +82,7 @@ class PlaybackView extends WatchUi.View {
     private var _settings as SettingsModel.Settings;
     private var _source as CannedWordSource;
     private var _engine as Reader.ReaderEngine;
+    private var _sync as Sync.SyncManager;
     private var _timer as Timer.Timer;
     private var _fontIndex as Number;
 
@@ -113,6 +114,19 @@ class PlaybackView extends WatchUi.View {
         _settings.loadFrom(); // overlay persisted values; defaults on fresh install
         _source = new CannedWordSource(); // decodes the dev stream once, at startup
         _engine = new Reader.ReaderEngine(_source, _settings.wpm, _settings.pauseMode);
+        // Story 3.6 (AC2): restore the saved position BEFORE the first onShow.
+        // SyncManager is the single pos_* writer, keyed on the source's book
+        // identity; a saved position seeks the engine to PAUSED at-or-before the
+        // saved word (never past it — loadPosition clamps/degrades), and the
+        // existing onShow STATE_IDLE guard then skips auto-play, so resume lands
+        // Paused with zero onShow change. A fresh install restores null and
+        // leaves the engine IDLE at 0 — the first-launch auto-play demo applies
+        // only to that case. Order matters: _source → _engine → restore.
+        _sync = new Sync.SyncManager(_source.bookId());
+        var restored = _sync.loadPosition(_source.wordCount());
+        if (restored != null) {
+            _engine.seekTo(restored);
+        }
         // Resolve the unbounded persisted fontSize against the ramp (3.1 deferred #1).
         _fontIndex = OrpLayout.clampFontIndex(_settings.fontSize, RAMP_LENGTH);
         _timer = new Timer.Timer();
@@ -156,7 +170,29 @@ class PlaybackView extends WatchUi.View {
     }
 
     function onHide() as Void {
+        // Becoming hidden (carousel navigation, a system overlay) is a catchable
+        // transition — force-save before the timer stops (Story 3.6, AC1).
+        commitPosition(true);
         _timer.stop();
+    }
+
+    // ── position persistence routing (Story 3.6, AC1) ──
+    // The ONE routing point for position writes in this view: every catchable
+    // transition funnels here; Sync.SyncManager owns the debounce/force gate and
+    // is the only Storage writer of the pos_* key. Call sites are the contract:
+    // onTimerTick playing branch (debounced), onTimerTick paused/finished branch
+    // (force — covers coast-finalize, instant-pause settle, and FINISHED),
+    // rewindOne (force — rewind-while-paused arms no pending tick), the chapter-
+    // card freeze (force — the Epic-4 chunk-boundary analog), onHide (force),
+    // and the App's onStop via commitOnStop (force). Chunk-boundary/disconnect
+    // proper are Epic-4 transitions — reserved, no BLE/chunks here.
+    private function commitPosition(force as Boolean) as Void {
+        _sync.commitPosition(_engine.index(), force, System.getTimer());
+    }
+
+    // Best-effort exit save — the App calls this from onStop (Story 3.6, Task 6).
+    function commitOnStop() as Void {
+        commitPosition(true);
     }
 
     // ── playback control surface (Story 3.3) ──
@@ -223,6 +259,11 @@ class PlaybackView extends WatchUi.View {
             return;
         }
         _engine.rewind();
+        // Force-save the rewound position (Story 3.6, AC1). Critical here:
+        // rewind-while-already-paused arms NO pending tick, so onTimerTick's
+        // paused branch never fires for it — without this explicit call a
+        // paused-rewind would silently miss the force-save.
+        commitPosition(true);
         recomputeJitter();
         WatchUi.requestUpdate();
     }
@@ -285,14 +326,18 @@ class PlaybackView extends WatchUi.View {
             return;
         }
         if (_engine.isPlaying() || _engine.isRamping()) {
+            commitPosition(false); // steady stream: debounced ~15 s (Story 3.6)
             WatchUi.requestUpdate();
             armTimer();
         } else {
             // Paused / finished: stop ticking (no runaway timer, no per-tick work
-            // while frozen). Refresh the burn-in jitter for the still frame BEFORE
-            // the repaint — no further tick comes while frozen, so the new offset
-            // must be applied to the very next (and only) requestUpdate or it is
-            // never drawn.
+            // while frozen). This branch is where coast-pause finalize, instant-
+            // pause settle, and TRANSITION_FINISHED all land — one force-save
+            // covers them (Story 3.6, AC1). Refresh the burn-in jitter for the
+            // still frame BEFORE the repaint — no further tick comes while
+            // frozen, so the new offset must be applied to the very next (and
+            // only) requestUpdate or it is never drawn.
+            commitPosition(true);
             recomputeJitter();
             WatchUi.requestUpdate();
         }
@@ -323,6 +368,10 @@ class PlaybackView extends WatchUi.View {
         _cardChapterTitle = cat.titleForWord(idx);
         _cardedIndex = idx;
         _engine.pauseAtCurrent(); // freeze ON the chapter's first word
+        // Chapter boundary = a natural force-save point (Story 3.6, AC1 — the
+        // Epic-4 chunk-boundary analog), and the card may sit ~2 s or hold on
+        // Wait indefinitely.
+        commitPosition(true);
         _chapterCard = true;
         if (_settings.chapterResume == SettingsModel.CHAPTER_RESUME_AUTO) {
             armCardTimer(); // breathe ~2 s, then resumeFromCard
