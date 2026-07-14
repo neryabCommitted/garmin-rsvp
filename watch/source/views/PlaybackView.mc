@@ -187,6 +187,14 @@ class PlaybackView extends WatchUi.View {
     // and the App's onStop via commitOnStop (force). Chunk-boundary/disconnect
     // proper are Epic-4 transitions — reserved, no BLE/chunks here.
     private function commitPosition(force as Boolean) as Void {
+        // Empty-book guard (review 2026-07-14): a decode-degraded session
+        // (wordCount 0 — CannedWordSource degrades instead of crashing) still
+        // reports the real bookId, so an unguarded force-save on hide/exit
+        // would write {"pos"=>0} over the good saved record — destroying the
+        // one state this story declares sacred. No readable book ⇒ no writes.
+        if (_source.wordCount() <= 0) {
+            return;
+        }
         _sync.commitPosition(_engine.index(), force, System.getTimer());
     }
 

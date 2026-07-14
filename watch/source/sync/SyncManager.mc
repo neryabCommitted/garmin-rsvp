@@ -86,12 +86,14 @@ module Sync {
 
         private var _bookId as String;
         private var _lastWriteMs as Number?;
+        private var _lastWrittenIndex as Number?;
 
         // migrateIfNeeded runs HERE, before any position read, so a schema bump
         // can never run over the position (AC3).
         function initialize(bookId as String) {
             _bookId = bookId;
             _lastWriteMs = null;
+            _lastWrittenIndex = null;
             migrateIfNeeded();
         }
 
@@ -111,19 +113,31 @@ module Sync {
         // The single position write path (AC1). The debounce/force gate is the
         // pure shouldCommit; a throwing write (e.g. StorageFullException on
         // exit) is swallowed-and-logged — a failed save must never crash a
-        // reading session or app exit (AC4). _lastWriteMs advances only on a
-        // successful write, so a failed debounced write retries next tick.
+        // reading session or app exit (AC4). Same-index suppression (review
+        // 2026-07-14): an index already persisted is never rewritten — exit's
+        // back-to-back onHide+onStop, rewind's explicit-force+settling-tick,
+        // and context-view round-trips would otherwise each rewrite an
+        // identical record to flash. (Skipping also leaves `ts` = when the
+        // position last CHANGED, the honest LWW timestamp.) On failure the
+        // debounce clock still advances — retry after one window, not on every
+        // ~85 ms tick against a persistently-throwing store (AR25) — while a
+        // force retry stays immediate (force bypasses the gate) and
+        // _lastWrittenIndex stays unset so the retry is not suppressed.
         function commitPosition(index as Number, force as Boolean, nowMs as Number) as Void {
+            if (_lastWrittenIndex != null && (_lastWrittenIndex as Number) == index) {
+                return; // already persisted — nothing new to write
+            }
             if (!shouldCommit(_lastWriteMs, nowMs, force)) {
                 return;
             }
             try {
                 Storage.setValue(StorageKeys.posKey(_bookId),
                     encodePosition(index, Time.now().value()) as Storage.ValueType);
-                _lastWriteMs = nowMs;
+                _lastWrittenIndex = index;
             } catch (e) {
                 System.println("Sync: position write failed");
             }
+            _lastWriteMs = nowMs; // success or failure: back off one debounce window
         }
 
         // Schema-version governance (AC3), before any position read. null ⇒
@@ -132,13 +146,18 @@ module Sync {
         // only sacred state, architecture.md:181). Epic 3 has no content-cache
         // keys yet, so the wipe body is a documented structured no-op; Epic 4
         // fills it with the chunk_/meta_ deletions (Story 4.1). All guarded.
+        // A THROWING schema read aborts the migration entirely (review
+        // 2026-07-14): treating it as fresh-install would stamp CURRENT over a
+        // possibly-mismatched layout and launder a real mismatch past the wipe
+        // — an unreadable version must leave the stamp alone (retry next
+        // launch); position reads proceed regardless.
         private function migrateIfNeeded() as Void {
             var stored = null;
             try {
                 stored = Storage.getValue(StorageKeys.SCHEMA_VERSION);
             } catch (e) {
-                System.println("Sync: schema read failed");
-                stored = null;
+                System.println("Sync: schema read failed — migration skipped");
+                return;
             }
             if (stored instanceof Lang.Number && (stored as Number) == SCHEMA_VERSION_CURRENT) {
                 return; // layout is current — the common path
