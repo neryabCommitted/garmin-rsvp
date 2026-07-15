@@ -29,6 +29,17 @@ import Toybox.WatchUi;
 // view stays PAUSED (AC3) instead of resuming. While words flow the view still
 // draws NO persistent bright chrome ("the screen owes the reader nothing but the
 // word").
+//
+// Story 3.7 adds display survival: the view owns a DisplayStrategy (base type
+// only, built via Display.createStrategy() — AC3 seam) whose activity session
+// keeps the display lit-dim for the whole session (gate V1). The session opens
+// idempotently at the three play sites and closes ONLY at App exit
+// (shutdownDisplay) — never on pause/card/onHide (rapid-cycle hazard; a pushed
+// context view fires onHide mid-reading). The App routes onDisplayModeChanged
+// here: an unreadable mode (Display.shouldPauseForMode) freezes playback
+// instantly (pauseAtCurrent — coast must not flow words onto a dark screen) with
+// a force-save; a wake repaints the Paused frame and NEVER auto-resumes, and the
+// waking tap/press is swallowed by the wake-grace guard in the action API.
 class PlaybackView extends WatchUi.View {
 
     // ── DESIGN palette (DESIGN.md Colors 102-113) — one place, by name, no inline
@@ -83,8 +94,15 @@ class PlaybackView extends WatchUi.View {
     private var _source as CannedWordSource;
     private var _engine as Reader.ReaderEngine;
     private var _sync as Sync.SyncManager;
+    private var _display as Display.DisplayStrategy;
     private var _timer as Timer.Timer;
     private var _fontIndex as Number;
+
+    // System.getTimer() of the last unreadable→readable display transition
+    // (null = never woken). Feeds the wake-tap grace guard (Story 3.7, AC2):
+    // the press/tap that wakes the display must not toggle playback or move
+    // position if the firmware also delivers it to the delegate.
+    private var _lastWakeMs as Number?;
 
     // Per-session burn-in jitter applied to the WHOLE composition (AC5). Bounded
     // random walk in [-2, +2] px; recomputed per session/per-pause, NEVER per word
@@ -129,6 +147,12 @@ class PlaybackView extends WatchUi.View {
         }
         // Resolve the unbounded persisted fontSize against the ramp (3.1 deferred #1).
         _fontIndex = OrpLayout.clampFontIndex(_settings.fontSize, RAMP_LENGTH);
+        // Story 3.7 (AC3): built via the factory, held as the BASE type — the
+        // view never names the concrete strategy. Constructed inert: the
+        // session opens at the play sites, NOT here (a restored-Paused launch
+        // must not burn activity-grade battery before the reader chooses to read).
+        _display = Display.createStrategy();
+        _lastWakeMs = null;
         _timer = new Timer.Timer();
         _jitterX = 0;
         _jitterY = 0;
@@ -161,6 +185,7 @@ class PlaybackView extends WatchUi.View {
         } else if (_engine.state() == Reader.STATE_IDLE) {
             _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
             armTimer();
+            _display.onPlaybackStart(); // open the screen-on session (3.7, idempotent)
         } else if (_engine.isPlaying() || _engine.isRamping()) {
             armTimer(); // became visible while live — keep the loop running
         }
@@ -184,8 +209,10 @@ class PlaybackView extends WatchUi.View {
     // (force — covers coast-finalize, instant-pause settle, and FINISHED),
     // rewindOne (force — rewind-while-paused arms no pending tick), the chapter-
     // card freeze (force — the Epic-4 chunk-boundary analog), onHide (force),
-    // and the App's onStop via commitOnStop (force). Chunk-boundary/disconnect
-    // proper are Epic-4 transitions — reserved, no BLE/chunks here.
+    // the unreadable-display auto-pause in onDisplayModeChanged (force — the
+    // screen may stay dark indefinitely, Story 3.7), and the App's onStop via
+    // commitOnStop (force). Chunk-boundary/disconnect proper are Epic-4
+    // transitions — reserved, no BLE/chunks here.
     private function commitPosition(force as Boolean) as Void {
         // Empty-book guard (review 2026-07-14): a decode-degraded session
         // (wordCount 0 — CannedWordSource degrades instead of crashing) still
@@ -203,6 +230,45 @@ class PlaybackView extends WatchUi.View {
         commitPosition(true);
     }
 
+    // ── display survival (Story 3.7) ──
+    // The App routes its AppBase-only onDisplayModeChanged callback here; the
+    // view coordinates the engine reaction (the strategy only bookkeeps — it
+    // never references engine or view, AR15).
+    function onDisplayModeChanged(mode as Number) as Void {
+        _display.onDisplayModeChanged(mode); // bookkeeping (AOD-hint evidence)
+        var unreadable = Display.shouldPauseForMode(mode, _display.isSessionActive());
+        if (unreadable && _chapterCard) {
+            // A pending Auto-card breath would resume the stream onto a black
+            // screen — cancel it. The card holds like a Wait card until START
+            // (a one-off Auto→Wait demotion for THIS card; deliberately not
+            // re-armed on wake — "never mid-stream" wins over the ~2 s breath).
+            _timer.stop();
+        } else if (unreadable && (_engine.isPlaying() || _engine.isRamping())) {
+            // Unreadable while words flow: freeze INSTANTLY at the current
+            // word. pauseAtCurrent, NOT requestPause — coast mode would keep
+            // flowing words to the sentence end on a screen the user can't
+            // read (AC2). Already handles RAMP (Story 3.5). The pending
+            // one-shot tick then fires once into onTimerTick's paused branch —
+            // harmless (commit dedupes via _lastWrittenIndex, jitter refreshes).
+            _engine.pauseAtCurrent();
+            commitPosition(true); // the screen may stay dark indefinitely
+            recomputeJitter();
+            WatchUi.requestUpdate();
+        } else if (!unreadable) {
+            // A wake (OFF→LOW/HIGH): repaint the Paused still-frame and open
+            // the wake-tap grace window. NEVER play()/resumeFromCard() here —
+            // wake finds Paused; resume is a deliberate START (AC2).
+            _lastWakeMs = System.getTimer();
+            WatchUi.requestUpdate();
+        }
+    }
+
+    // Session teardown — the App calls this from onStop AFTER commitOnStop
+    // (position save first; position is the sacred state — Story 3.7, Task 5).
+    function shutdownDisplay() as Void {
+        _display.shutdown();
+    }
+
     // ── playback control surface (Story 3.3) ──
     // The delegate calls these; the view drives the engine. None of them stops the
     // timer manually: coast pause needs ticks to reach the sentence end, and
@@ -215,6 +281,13 @@ class PlaybackView extends WatchUi.View {
     // paused branch. Resume re-arms the ramp (engine.play) and the timer. FINISHED
     // is terminal — play() no-ops it, so there is no resume from the end.
     function pauseOrResume() as Void {
+        // Wake-tap grace (Story 3.7, AC2): if the firmware delivers the
+        // display-waking tap/press through to the delegate, it must not toggle
+        // playback. Whether it ever reaches us is a hardware answer (Task 8d)
+        // — the guard is cheap insurance either way.
+        if (Display.isWakeGrace(_lastWakeMs, System.getTimer(), Display.WAKE_GRACE_MS)) {
+            return;
+        }
         // START during a chapter card (Auto or Wait) resumes the stream immediately —
         // the card-aware branch must come first, because the engine is PAUSED behind
         // the card and would otherwise be treated as a normal paused resume (Story 3.5).
@@ -228,6 +301,8 @@ class PlaybackView extends WatchUi.View {
         } else if (_engine.isPaused()) {
             _engine.play(System.getTimer()); // re-arms the 3-beat ramp
             armTimer();                       // timer self-stopped while paused
+            _display.onPlaybackStart();       // idempotent; also re-opens after a
+                                              // fallback-mode auto-pause resume (3.7)
             WatchUi.requestUpdate();
         }
     }
@@ -259,6 +334,12 @@ class PlaybackView extends WatchUi.View {
     // jitter refresh; if we were already paused there is no pending tick, so this
     // repaint is the one that lands.)
     function rewindOne() as Void {
+        // Wake-tap grace (Story 3.7, AC2): the waking input must not move
+        // position. (stepWpm/openContextView stay unguarded — both are
+        // harmless while paused.)
+        if (Display.isWakeGrace(_lastWakeMs, System.getTimer(), Display.WAKE_GRACE_MS)) {
+            return;
+        }
         // No rewind out of a chapter card or the Finished screen (Story 3.5, Task 8).
         // FINISHED is terminal — re-read is a phone-side decision (UX-DR14), which is
         // the deliberate resolution of deferred-work #107, NOT a missing feature. A
@@ -414,6 +495,8 @@ class PlaybackView extends WatchUi.View {
         _chapterCard = false;
         _engine.play(System.getTimer());
         armTimer();
+        _display.onPlaybackStart(); // idempotent (3.7) — the session normally
+                                    // survived the card; this heals a fallback
         WatchUi.requestUpdate();
     }
 
@@ -522,6 +605,20 @@ class PlaybackView extends WatchUi.View {
         dc.drawText(cx, line1Y + lineH, font,
             timeLeft + " left · " + _engine.wpm().toString() + " wpm",
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // During-Activity-AOD instruction (Story 3.7, Task 6 — the gates.md §V1
+        // carry). Armed ONLY after the display hit OFF while a session was
+        // recording — exactly the signature of the user's During Activity →
+        // Always On setting being off (with it on, V1 proved the mode never
+        // reaches OFF in 61 min). Paused-frame-only chrome (UX-DR8), factual
+        // wording (UX-DR23), Ink-Dim XTINY in the upper third — clear of the
+        // word, guides, and the lower-third readout — riding the session
+        // jitter like everything else. Session-local state, not persisted.
+        if (_display.sawOffDuringSession()) {
+            dc.drawText(cx, h / 5 + _jitterY, Graphics.FONT_SYSTEM_XTINY,
+                "Display > During Activity > Always On",
+                Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+        }
     }
 
     // Transient WPM readout (AC2). Drawn ONLY while NOT paused and while the

@@ -89,6 +89,29 @@ class PaceTurnerApp extends Application.AppBase {
         if (_playbackView != null) {
             (_playbackView as PlaybackView).commitOnStop();
         }
+        // Story 3.7 (Task 5): release the screen-on activity session — position
+        // save FIRST, session teardown second (position is the sacred state).
+        // An abrupt kill that skips onStop leaves the firmware to reap the
+        // orphaned session; nothing recoverable is lost.
+        if (_playbackView != null) {
+            (_playbackView as PlaybackView).shutdownDisplay();
+        }
+    }
+
+    // Display-mode transition (AppBase-only callback, API 5.0.0 — Story-1.3
+    // precedent): route to the playback view, which owns the engine reaction
+    // (auto-pause on unreadable / repaint on wake, Story 3.7). Broad-caught —
+    // a display-mode transition must never crash the app (robustness #5), and
+    // one println on failure only (AR25).
+    function onDisplayModeChanged() as Void {
+        try {
+            if (_playbackView != null) {
+                (_playbackView as PlaybackView).onDisplayModeChanged(
+                    System.getDisplayMode() as Number);
+            }
+        } catch (e) {
+            System.println("Display: mode-change route failed");
+        }
     }
 
     function getInitialView() as [WatchUi.Views] or [WatchUi.Views, WatchUi.InputDelegates] {
