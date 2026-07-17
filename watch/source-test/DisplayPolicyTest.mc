@@ -2,43 +2,40 @@ import Toybox.Lang;
 import Toybox.Test;
 
 // Host tests for the PURE half of the Display module (Story 3.7, AC2/AC3) —
-// the unreadable-display pause policy and the wake-tap grace window. The
-// ActivitySessionStrategy adapter (ActivityRecording lifecycle) needs a device
-// context and is covered by the on-device checks (Task 8), exactly as the
-// SyncManager Storage adapter is. No Test.assert* API — conditionals +
-// logger.error(...) + return false (mirrors SyncManagerTest).
+// the unreadable-display pause policy and the wake-tap grace window. Real
+// display-mode transitions, AOD behavior, and wake-event delivery are
+// hardware-only (AR15) and covered by the on-device checks (Task 8). No
+// Test.assert* API — conditionals + logger.error(...) + return false
+// (mirrors SyncManagerTest).
 
-// ── AC2: shouldPauseForMode — the V1→AC2 policy matrix ──────────────────────
+// ── AC2: shouldPauseForMode — the app-mode policy matrix (ADR 0003) ─────────
 // Mode values mirror System.DISPLAY_MODE_*: HIGH_POWER=0, LOW_POWER=1, OFF=2
 // (verified against SDK 9.1.0 api.mir). The policy takes the mode as a plain
-// Number so it stays Lang-only.
+// Number so it stays Lang-only. Amended 2026-07-17: the session dimension is
+// gone with the activity session — dim (LOW) is a designed-for reading state
+// in both display profiles (gate-V1 session-dim + the 2026-07-16 on-wrist
+// general-AOD probe), so LOW never pauses.
 
 (:test)
 function displayShouldPauseMatrix(logger as Test.Logger) as Boolean {
-    // OFF (2) ⇒ pause always — unreadable, full stop, session or not.
-    if (!Display.shouldPauseForMode(2, true)) { logger.error("OFF+session must pause"); return false; }
-    if (!Display.shouldPauseForMode(2, false)) { logger.error("OFF+no-session must pause"); return false; }
-    // LOW (1) + session ⇒ words KEEP FLOWING — the V1-validated legible dim
-    // reading state (gates.md §V1 passed-dim). This is the row that encodes
-    // the V1→AC2 reconciliation; flipping it would pause every session ~15 s in.
-    if (Display.shouldPauseForMode(1, true)) { logger.error("LOW+session must NOT pause (V1 dim reading state)"); return false; }
-    // LOW (1) + no session ⇒ pause — fallback mode, legibility unvalidated,
-    // en route to OFF.
-    if (!Display.shouldPauseForMode(1, false)) { logger.error("LOW+no-session must pause (fallback)"); return false; }
-    // HIGH (0) ⇒ words flow, session or not.
-    if (Display.shouldPauseForMode(0, true)) { logger.error("HIGH+session must not pause"); return false; }
-    if (Display.shouldPauseForMode(0, false)) { logger.error("HIGH+no-session must not pause"); return false; }
+    // OFF (2) ⇒ pause always — unreadable, full stop.
+    if (!Display.shouldPauseForMode(2)) { logger.error("OFF must pause"); return false; }
+    // LOW (1) ⇒ words KEEP FLOWING — the validated legible dim reading state
+    // (gates.md §V1 + app-mode probe). Flipping this row would pause every
+    // reading session seconds after the dim timeout.
+    if (Display.shouldPauseForMode(1)) { logger.error("LOW must NOT pause (designed-for dim reading state)"); return false; }
+    // HIGH (0) ⇒ words flow.
+    if (Display.shouldPauseForMode(0)) { logger.error("HIGH must not pause"); return false; }
     return true;
 }
 
 (:test)
 function displayShouldPauseUnknownModeDegradesSafe(logger as Test.Logger) as Boolean {
     // Any unrecognized mode value ⇒ pause — an unknown display state is treated
-    // as unreadable (bounds-check-and-degrade, NFR8/AR24), session or not.
-    if (!Display.shouldPauseForMode(99, true)) { logger.error("unknown mode 99+session must pause"); return false; }
-    if (!Display.shouldPauseForMode(99, false)) { logger.error("unknown mode 99 must pause"); return false; }
-    if (!Display.shouldPauseForMode(-1, true)) { logger.error("unknown mode -1+session must pause"); return false; }
-    if (!Display.shouldPauseForMode(3, false)) { logger.error("unknown mode 3 must pause"); return false; }
+    // as unreadable (bounds-check-and-degrade, NFR8/AR24).
+    if (!Display.shouldPauseForMode(99)) { logger.error("unknown mode 99 must pause"); return false; }
+    if (!Display.shouldPauseForMode(-1)) { logger.error("unknown mode -1 must pause"); return false; }
+    if (!Display.shouldPauseForMode(3)) { logger.error("unknown mode 3 must pause"); return false; }
     return true;
 }
 

@@ -89,10 +89,10 @@ class PaceTurnerApp extends Application.AppBase {
         if (_playbackView != null) {
             (_playbackView as PlaybackView).commitOnStop();
         }
-        // Story 3.7 (Task 5): release the screen-on activity session — position
-        // save FIRST, session teardown second (position is the sacred state).
-        // An abrupt kill that skips onStop leaves the firmware to reap the
-        // orphaned session; nothing recoverable is lost.
+        // Story 3.7 (Task 5): release the screen-on strategy — position save
+        // FIRST, strategy teardown second (position is the sacred state).
+        // App-mode's shutdown is a no-op (ADR 0003); the call stays wired so
+        // the Active variant's session teardown swaps in behind the seam.
         if (_playbackView != null) {
             (_playbackView as PlaybackView).shutdownDisplay();
         }

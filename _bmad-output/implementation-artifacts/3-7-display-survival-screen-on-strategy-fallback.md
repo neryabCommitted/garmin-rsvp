@@ -89,6 +89,17 @@ so that hands-off reading actually works on the wrist (FR4, gate V1).
   - [ ] **(f) No-regression:** 3.2–3.6 flows (play/pause/WPM/rewind/context/chapter cards/Finished/relaunch-resume) unchanged with the session active.
   - [ ] Record all results in the story + sprint note (machine-readable).
 
+- [x] **Task 9 — APP-MODE AMENDMENT (2026-07-17, Nerya-approved — ADR 0003).** Supersedes the session mechanism in AC1/AC2 after on-device probes (2026-07-16/17) and market evidence; AC3's seam is what made it a one-module change:
+  - [x] Probe evidence recorded: Fit permission alone ⇒ activities-list placement; running session ⇒ touch lock; session-less app + general-use AOD + on-wrist ⇒ dim @~8 s, never OFF, words keep flowing; AOD off ⇒ OFF after minutes, auto-pause froze at the current word (safety net hardware-proven). Readinity–RSVP Reader (store) ships zero-permission app-mode; WristTale ships Fit/session. No third mechanism exists (SDK docs + dev forum + probes concur).
+  - [x] `watch/manifest.xml`: `Fit` permission removed (back to `Communications` only).
+  - [x] `display/ActivitySessionStrategy.mc` DELETED (git-preserved at `81978d6`; returns in the "PaceTurner Active" second listing after publish — ADR 0003).
+  - [x] `display/DisplayStrategy.mc`: policy amended — `shouldPauseForMode(mode)` (session param gone): HIGH/LOW ⇒ flow (dim is a designed-for reading state), OFF/unknown ⇒ pause; factory ships the base class; all seam lifecycle call sites stay wired (no-ops) for the Active variant.
+  - [x] `PlaybackView`: hint arming moved into the view (`_sawDisplayOff`, set on any observed OFF — with general-use AOD on + on-wrist, OFF never arrives); hint copy → `"Display > Always On"`; wake-grace guard + auto-pause handler unchanged.
+  - [x] `PaceTurnerApp`: unchanged wiring (route + `shutdownDisplay()` kept, app-mode no-ops).
+  - [x] `DisplayPolicyTest.mc`: matrix re-pinned to the amended policy (LOW must NOT pause). 85/85 @ Strict L3 in the CI image; both builds warning-free on host 9.1.0 + image 8.4.0 (release 44,348 B). AC3 grep: no code references outside `display/` (comments only).
+  - [x] Documented: ADR `docs/decisions/0003-screen-strategy-app-mode-and-active-variant.md` (incl. the post-publish "PaceTurner Active" second-listing plan) + gates.md §V1 amendment.
+  - [ ] Final on-device pass on the app-mode build (supersedes Task 8's session checks): apps-area placement + touch normal; AOD-off dark ⇒ Paused-at-word + hint line visible on the paused frame; wake semantics (no auto-resume, wake-tap grace); 3.2–3.6 no-regression.
+
 ## Dev Notes
 
 ### Scope boundary (read first)
@@ -198,16 +209,21 @@ claude-fable-5 (Amelia, dev-story 2026-07-15)
 - **Task 8 (PENDING — human-in-the-loop):** on-device Fenix 8 checks (a)–(f) not run; the simulator lies about display modes/AOD/watchdogs (AR15). Sideload `watch/bin/PaceTurner.prg` per docs/setup.md. Includes the V1-carried outdoor dim-legibility spot-check, AOD-off fallback, wake semantics (tune or document `WAKE_GRACE_MS`), session hygiene (no Garmin Connect activity), and 3.2–3.6 no-regression.
 - Fallback mode (session open fails / start() false) is a behavior, not an error state: stricter pause policy (LOW⇒pause), one println, no retry loop, no user-facing error (AR24/AR25, quiet librarian).
 - No engine/Settings/InputMap/PlaybackDelegate/SyncManager/jungle changes; no Storage schema change; GateV2 spike preserved.
+- **Amendment 2026-07-17 (Task 9, ADR 0003):** shipped strategy swapped to APP-MODE after Nerya's on-device findings — see Task 9, the Change Log, and `docs/decisions/0003`. The 07-15 session implementation is fully git-preserved at `81978d6` and is the planned "PaceTurner Active" second listing (post-publish, Epic 5).
 
 ### File List
 
-- `watch/manifest.xml` — modified: `Fit` permission added.
-- `watch/source/display/DisplayStrategy.mc` — NEW: `module Display` (pure policy + base seam class + factory).
-- `watch/source/display/ActivitySessionStrategy.mc` — NEW: ActivityRecording session adapter, spike-robustness hardened.
-- `watch/source/views/PlaybackView.mc` — modified: strategy ownership, play-site session opens, `onDisplayModeChanged` engine reaction, wake-grace guards, `shutdownDisplay()`, AOD hint line, contract-comment extension.
-- `watch/source/PaceTurnerApp.mc` — modified: `onDisplayModeChanged` AppBase override routing to the view; `onStop` session teardown after position save.
-- `watch/source-test/DisplayPolicyTest.mc` — NEW: 4 host tests (policy matrix, unknown-mode degrade, wake-grace window, null/wraparound).
+- `watch/manifest.xml` — net unchanged after amendment (`Fit` added 07-15, removed 07-17; `Communications` only).
+- `watch/source/display/DisplayStrategy.mc` — NEW: `module Display` (pure policy + base seam class + factory). Amended 07-17: app-mode policy (LOW ⇒ flow, no session param), factory ships the base.
+- `watch/source/display/ActivitySessionStrategy.mc` — added 07-15, DELETED 07-17 (git-preserved at `81978d6`; returns as the "PaceTurner Active" listing — ADR 0003).
+- `watch/source/views/PlaybackView.mc` — modified: strategy ownership, play-site lifecycle calls, `onDisplayModeChanged` engine reaction, wake-grace guards, `shutdownDisplay()`, AOD hint line (view-armed `_sawDisplayOff`, copy `"Display > Always On"`), contract-comment extension.
+- `watch/source/PaceTurnerApp.mc` — modified: `onDisplayModeChanged` AppBase override routing to the view; `onStop` strategy teardown after position save.
+- `watch/source-test/DisplayPolicyTest.mc` — NEW: 4 host tests (app-mode policy matrix, unknown-mode degrade, wake-grace window, null/wraparound).
+- `docs/decisions/0003-screen-strategy-app-mode-and-active-variant.md` — NEW: the strategy decision + post-publish "PaceTurner Active" second-listing plan.
+- `docs/gates.md` — modified: §V1 amendment (no-session control probes, shipped-strategy change).
 
 ## Change Log
 
 - 2026-07-15 (dev-story, Amelia): Story 3.7 implemented — display survival via ActivityRecording session behind the `Display` seam (AC1/AC3), unreadable-display auto-pause with instant freeze + force-save + wake-finds-Paused (AC2), Fit manifest permission, AOD hint line, wake-tap grace guard. Closes the deferred-work:43 spike-robustness bundle. 85/85 host tests @ Strict L3 in the CI image (81→85), both builds warning-free on-host 9.1.0 and in-image 8.4.0 (release 45,084 B), seeded-mutation red-check passed. Task 8 on-device checks PENDING human.
+- 2026-07-16/17 (on-device probe session, Nerya + Amelia): session build surfaced activities-list placement (← Fit permission) and during-activity touch lock (← running session); three probe builds isolated the mechanisms; app-mode dim reading validated on-wrist with general-use AOD; Readinity/WristTale market evidence gathered. Ramp-countdown WPM-scaling recorded in deferred-work.md.
+- 2026-07-17 (amendment, Amelia — Nerya-approved): swapped to APP-MODE (ADR 0003): Fit removed, ActivitySessionStrategy deleted (git-preserved `81978d6`), policy LOW ⇒ flow, hint → `"Display > Always On"` (view-armed on observed OFF), seam + lifecycle wiring kept for the post-publish "PaceTurner Active" second listing. gates.md §V1 amended. 85/85 @ Strict L3 in CI image, both builds warning-free (release 44,348 B). Final app-mode on-device pass PENDING human.

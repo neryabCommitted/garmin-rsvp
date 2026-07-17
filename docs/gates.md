@@ -61,6 +61,26 @@ During-Activity display profile, and the app must instruct users to enable
 **During Activity → Always On**. PlaybackView/UX must design for dim legibility. Gate outcome
 swaps a module, not the architecture (architecture §Frontend Architecture).
 
+**Amendment (2026-07-17, Story 3.7 — [ADR 0003](decisions/0003-screen-strategy-app-mode-and-active-variant.md)).**
+V1 never ran a **no-session control**; Story 3.7's on-device probes (2026-07-16/17, real
+Fenix 8, Nerya) filled that gap and changed the shipped mechanism:
+
+- **Session-less app, general-use AOD on, watch on-wrist:** dim at ~8 s, display **never OFF**,
+  words keep flowing — app-mode dim reading is viable for the actual reading posture.
+- **AOD off (or off-wrist):** OFF after some minutes; the unreadable-display auto-pause froze
+  playback at the current word (resume-never-lies held through the dark path).
+- **Fit permission alone** (no session running) moves the app into the Fenix 8 **activities
+  list**; the **running session** engages the during-activity **touch lock** — two UX costs the
+  60-min table run could not surface.
+
+Verdict unchanged (**passed-dim** — the session path works as measured), but the **shipped
+strategy is app-mode** (no Fit, no session; policy: LOW ⇒ words flow, OFF ⇒ instant auto-pause;
+hint instructs **Display > Always On**). The session path is git-preserved (`81978d6`) and
+returns as the separate **"PaceTurner Active"** listing after the initial publish (ADR 0003).
+Gate V4 (Story 3.9) measures battery on the app-mode path; its ~60-min on-wrist run doubles as
+the app-mode endurance proof. Market corroboration: Readinity–RSVP Reader (zero permissions,
+"AOD mode with dimmed word") ships app-mode; WristTale ships the Fit/session path.
+
 ## V2 — Transfer reliability & bridge sufficiency (Story 1.4)
 _Procedure:_ many sequential chunk sends over the managed Communications API
 (`watch_connectivity_garmin`); measure success rate; decide keep-bridge vs custom MethodChannel (OQ2).

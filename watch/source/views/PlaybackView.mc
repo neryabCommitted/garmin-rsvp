@@ -30,16 +30,19 @@ import Toybox.WatchUi;
 // draws NO persistent bright chrome ("the screen owes the reader nothing but the
 // word").
 //
-// Story 3.7 adds display survival: the view owns a DisplayStrategy (base type
-// only, built via Display.createStrategy() — AC3 seam) whose activity session
-// keeps the display lit-dim for the whole session (gate V1). The session opens
-// idempotently at the three play sites and closes ONLY at App exit
-// (shutdownDisplay) — never on pause/card/onHide (rapid-cycle hazard; a pushed
-// context view fires onHide mid-reading). The App routes onDisplayModeChanged
-// here: an unreadable mode (Display.shouldPauseForMode) freezes playback
-// instantly (pauseAtCurrent — coast must not flow words onto a dark screen) with
-// a force-save; a wake repaints the Paused frame and NEVER auto-resumes, and the
-// waking tap/press is swallowed by the wake-grace guard in the action API.
+// Story 3.7 adds display survival (amended 2026-07-17 to APP-MODE, ADR 0003):
+// the view owns a DisplayStrategy (base type only, built via
+// Display.createStrategy() — AC3 seam). The shipped strategy is the inert
+// app-mode base — no activity session, no Fit permission; the watch's own
+// display settings govern the screen and words keep flowing through dim
+// (hardware-validated 2026-07-16/17). The strategy lifecycle calls at the
+// play sites and App exit are kept (no-ops today) so the "PaceTurner Active"
+// session variant swaps in behind the factory untouched. The App routes
+// onDisplayModeChanged here: an unreadable mode (Display.shouldPauseForMode —
+// OFF or unknown) freezes playback instantly (pauseAtCurrent — coast must not
+// flow words onto a dark screen) with a force-save; a wake repaints the Paused
+// frame and NEVER auto-resumes, and the waking tap/press is swallowed by the
+// wake-grace guard in the action API.
 class PlaybackView extends WatchUi.View {
 
     // ── DESIGN palette (DESIGN.md Colors 102-113) — one place, by name, no inline
@@ -104,6 +107,13 @@ class PlaybackView extends WatchUi.View {
     // position if the firmware also delivers it to the delegate.
     private var _lastWakeMs as Number?;
 
+    // The display reached OFF at least once this session (Story 3.7 app-mode,
+    // Task 6): with general-use AOD on and the watch worn, OFF never arrives —
+    // so an observed OFF is the evidence that the AOD setting is off (or the
+    // watch was off-wrist) and the paused frame earns the one-line setting
+    // hint. View-owned: the app-mode strategy keeps no session to scope it to.
+    private var _sawDisplayOff as Boolean;
+
     // Per-session burn-in jitter applied to the WHOLE composition (AC5). Bounded
     // random walk in [-2, +2] px; recomputed per session/per-pause, NEVER per word
     // (the anchor must feel stable while reading).
@@ -148,11 +158,12 @@ class PlaybackView extends WatchUi.View {
         // Resolve the unbounded persisted fontSize against the ramp (3.1 deferred #1).
         _fontIndex = OrpLayout.clampFontIndex(_settings.fontSize, RAMP_LENGTH);
         // Story 3.7 (AC3): built via the factory, held as the BASE type — the
-        // view never names the concrete strategy. Constructed inert: the
-        // session opens at the play sites, NOT here (a restored-Paused launch
-        // must not burn activity-grade battery before the reader chooses to read).
+        // view never names a concrete strategy. App-mode ships the inert base
+        // (ADR 0003); the lifecycle calls at the play sites stay wired so the
+        // Active variant's session strategy swaps in behind the factory only.
         _display = Display.createStrategy();
         _lastWakeMs = null;
+        _sawDisplayOff = false;
         _timer = new Timer.Timer();
         _jitterX = 0;
         _jitterY = 0;
@@ -185,7 +196,7 @@ class PlaybackView extends WatchUi.View {
         } else if (_engine.state() == Reader.STATE_IDLE) {
             _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
             armTimer();
-            _display.onPlaybackStart(); // open the screen-on session (3.7, idempotent)
+            _display.onPlaybackStart(); // strategy lifecycle (3.7; app-mode no-op)
         } else if (_engine.isPlaying() || _engine.isRamping()) {
             armTimer(); // became visible while live — keep the loop running
         }
@@ -235,8 +246,11 @@ class PlaybackView extends WatchUi.View {
     // view coordinates the engine reaction (the strategy only bookkeeps — it
     // never references engine or view, AR15).
     function onDisplayModeChanged(mode as Number) as Void {
-        _display.onDisplayModeChanged(mode); // bookkeeping (AOD-hint evidence)
-        var unreadable = Display.shouldPauseForMode(mode, _display.isSessionActive());
+        _display.onDisplayModeChanged(mode); // strategy bookkeeping (no-op in app-mode)
+        if (mode == System.DISPLAY_MODE_OFF as Number) { // AOD-hint evidence (Task 6)
+            _sawDisplayOff = true;
+        }
+        var unreadable = Display.shouldPauseForMode(mode);
         if (unreadable && _chapterCard) {
             // A pending Auto-card breath would resume the stream onto a black
             // screen — cancel it. The card holds like a Wait card until START
@@ -301,8 +315,7 @@ class PlaybackView extends WatchUi.View {
         } else if (_engine.isPaused()) {
             _engine.play(System.getTimer()); // re-arms the 3-beat ramp
             armTimer();                       // timer self-stopped while paused
-            _display.onPlaybackStart();       // idempotent; also re-opens after a
-                                              // fallback-mode auto-pause resume (3.7)
+            _display.onPlaybackStart();       // strategy lifecycle (3.7; app-mode no-op)
             WatchUi.requestUpdate();
         }
     }
@@ -495,8 +508,7 @@ class PlaybackView extends WatchUi.View {
         _chapterCard = false;
         _engine.play(System.getTimer());
         armTimer();
-        _display.onPlaybackStart(); // idempotent (3.7) — the session normally
-                                    // survived the card; this heals a fallback
+        _display.onPlaybackStart(); // strategy lifecycle (3.7; app-mode no-op)
         WatchUi.requestUpdate();
     }
 
@@ -606,17 +618,19 @@ class PlaybackView extends WatchUi.View {
             timeLeft + " left · " + _engine.wpm().toString() + " wpm",
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
-        // During-Activity-AOD instruction (Story 3.7, Task 6 — the gates.md §V1
-        // carry). Armed ONLY after the display hit OFF while a session was
-        // recording — exactly the signature of the user's During Activity →
-        // Always On setting being off (with it on, V1 proved the mode never
-        // reaches OFF in 61 min). Paused-frame-only chrome (UX-DR8), factual
-        // wording (UX-DR23), Ink-Dim XTINY in the upper third — clear of the
-        // word, guides, and the lower-third readout — riding the session
-        // jitter like everything else. Session-local state, not persisted.
-        if (_display.sawOffDuringSession()) {
+        // General-use-AOD instruction (Story 3.7 app-mode, Task 6 — the
+        // gates.md §V1 carry, re-targeted by ADR 0003). Armed after the
+        // display reached OFF this session — with general-use Always On
+        // enabled and the watch worn, OFF never arrives (on-device probe
+        // 2026-07-16), so an observed OFF means the setting is off (or the
+        // watch was off-wrist). Paused-frame-only chrome (UX-DR8), factual
+        // wording (UX-DR23, reword on-device if it reads badly), Ink-Dim
+        // XTINY in the upper third — clear of the word, guides, and the
+        // lower-third readout — riding the session jitter like everything
+        // else. Session-local state, not persisted.
+        if (_sawDisplayOff) {
             dc.drawText(cx, h / 5 + _jitterY, Graphics.FONT_SYSTEM_XTINY,
-                "Display > During Activity > Always On",
+                "Display > Always On",
                 Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
         }
     }
