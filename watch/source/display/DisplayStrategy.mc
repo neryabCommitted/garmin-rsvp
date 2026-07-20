@@ -62,6 +62,9 @@ module Display {
     // True iff `now` is inside the wake-tap grace window opened at lastWakeMs.
     // null ⇒ never woken ⇒ false. A getTimer() wraparound (now < lastWakeMs)
     // ⇒ false — grace over (mirrors the GateV2.armWindowOpen window idiom).
+    // The elapsed subtraction is guarded too: a ≥2^31 ms gap with now still
+    // numerically ≥ last overflows negative, which must read as grace-over,
+    // not phantom grace (review 2026-07-20).
     function isWakeGrace(lastWakeMs as Number?, now as Number, graceMs as Number) as Boolean {
         if (lastWakeMs == null) {
             return false;
@@ -70,7 +73,19 @@ module Display {
         if (now < last) {
             return false;
         }
-        return now - last < graceMs;
+        var elapsed = now - last;
+        return elapsed >= 0 && elapsed < graceMs;
+    }
+
+    // The wake EDGE: only an unreadable→readable transition opens the grace
+    // window. The view feeds it the previous and current shouldPauseForMode
+    // verdicts. Without the edge check, the routine HIGH→LOW dim (~8 s into
+    // every session) and the LOW→HIGH brighten a button press itself causes
+    // would each open a 400 ms window that swallows deliberate input — a
+    // pause-while-dim would be silently eaten while words keep flowing
+    // (review 2026-07-20, found by all three layers).
+    function isWakeTransition(wasUnreadable as Boolean, nowUnreadable as Boolean) as Boolean {
+        return wasUnreadable && !nowUnreadable;
     }
 
     // ── the strategy seam (AC3) ──────────────────────────────────────────────

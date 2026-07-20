@@ -107,6 +107,15 @@ class PlaybackView extends WatchUi.View {
     // position if the firmware also delivers it to the delegate.
     private var _lastWakeMs as Number?;
 
+    // shouldPauseForMode verdict of the LAST observed display mode, so the
+    // grace window opens ONLY on the unreadable→readable edge (a real wake,
+    // Display.isWakeTransition). Without it, the routine HIGH→LOW dim and the
+    // LOW→HIGH brighten a button press itself causes would each open a 400 ms
+    // window that eats deliberate input (review 2026-07-20). Initialized
+    // false: an app can only be launched/interacted with on a readable
+    // display, and callbacks report transitions only.
+    private var _lastModeUnreadable as Boolean;
+
     // The display reached OFF at least once this session (Story 3.7 app-mode,
     // Task 6): with general-use AOD on and the watch worn, OFF never arrives —
     // so an observed OFF is the evidence that the AOD setting is off (or the
@@ -163,6 +172,7 @@ class PlaybackView extends WatchUi.View {
         // Active variant's session strategy swaps in behind the factory only.
         _display = Display.createStrategy();
         _lastWakeMs = null;
+        _lastModeUnreadable = false;
         _sawDisplayOff = false;
         _timer = new Timer.Timer();
         _jitterX = 0;
@@ -194,9 +204,14 @@ class PlaybackView extends WatchUi.View {
                 armCardTimer();
             }
         } else if (_engine.state() == Reader.STATE_IDLE) {
-            _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
-            armTimer();
-            _display.onPlaybackStart(); // strategy lifecycle (3.7; app-mode no-op)
+            // Play-site display guard (review 2026-07-20): never auto-play
+            // onto an unreadable screen — stay IDLE; a later deliberate START
+            // (on a readable display) starts the demo instead.
+            if (!displayUnreadableNow()) {
+                _engine.play(System.getTimer()); // first-launch demo auto-play; no-op if empty
+                armTimer();
+                _display.onPlaybackStart(); // strategy lifecycle (3.7; app-mode no-op)
+            }
         } else if (_engine.isPlaying() || _engine.isRamping()) {
             armTimer(); // became visible while live — keep the loop running
         }
@@ -251,6 +266,8 @@ class PlaybackView extends WatchUi.View {
             _sawDisplayOff = true;
         }
         var unreadable = Display.shouldPauseForMode(mode);
+        var wasUnreadable = _lastModeUnreadable;
+        _lastModeUnreadable = unreadable;
         if (unreadable && _chapterCard) {
             // A pending Auto-card breath would resume the stream onto a black
             // screen — cancel it. The card holds like a Wait card until START
@@ -269,11 +286,31 @@ class PlaybackView extends WatchUi.View {
             recomputeJitter();
             WatchUi.requestUpdate();
         } else if (!unreadable) {
-            // A wake (OFF→LOW/HIGH): repaint the Paused still-frame and open
-            // the wake-tap grace window. NEVER play()/resumeFromCard() here —
-            // wake finds Paused; resume is a deliberate START (AC2).
-            _lastWakeMs = System.getTimer();
+            // Readable again: repaint the Paused still-frame. The grace window
+            // opens ONLY on a true wake — the unreadable→readable EDGE
+            // (Display.isWakeTransition) — never on dim/brighten transitions
+            // between readable modes, which would eat deliberate input
+            // (review 2026-07-20). NEVER play()/resumeFromCard() here — wake
+            // finds Paused; resume is a deliberate START (AC2).
+            if (Display.isWakeTransition(wasUnreadable, unreadable)) {
+                _lastWakeMs = System.getTimer();
+            }
             WatchUi.requestUpdate();
+        }
+    }
+
+    // Current-mode readability probe for the play sites (review 2026-07-20):
+    // starting playback must consult the display NOW — if a waking key event
+    // is delivered BEFORE the OFF→HIGH mode callback (ordering is firmware-
+    // owned), the transition-driven policy alone would let the wake resume
+    // onto a still-OFF screen with no further transition left to re-pause it.
+    // Fail-OPEN on a throwing read: blocking all resumes forever on a broken
+    // mode API is worse than the pre-3.7 behavior it would regress to.
+    private function displayUnreadableNow() as Boolean {
+        try {
+            return Display.shouldPauseForMode(System.getDisplayMode() as Number);
+        } catch (e) {
+            return false;
         }
     }
 
@@ -313,6 +350,13 @@ class PlaybackView extends WatchUi.View {
             _engine.requestPause();
             WatchUi.requestUpdate();
         } else if (_engine.isPaused()) {
+            // Play-site display guard (review 2026-07-20): a resume must not
+            // start words onto a screen that is unreadable RIGHT NOW — the
+            // wake-grace guard above only helps when the mode callback beat
+            // the key event to us; this holds when it didn't.
+            if (displayUnreadableNow()) {
+                return;
+            }
             _engine.play(System.getTimer()); // re-arms the 3-beat ramp
             armTimer();                       // timer self-stopped while paused
             _display.onPlaybackStart();       // strategy lifecycle (3.7; app-mode no-op)
@@ -348,8 +392,8 @@ class PlaybackView extends WatchUi.View {
     // repaint is the one that lands.)
     function rewindOne() as Void {
         // Wake-tap grace (Story 3.7, AC2): the waking input must not move
-        // position. (stepWpm/openContextView stay unguarded — both are
-        // harmless while paused.)
+        // position. (stepWpm stays unguarded — harmless while paused;
+        // openContextView gained its own guard in the 2026-07-20 review.)
         if (Display.isWakeGrace(_lastWakeMs, System.getTimer(), Display.WAKE_GRACE_MS)) {
             return;
         }
@@ -379,6 +423,14 @@ class PlaybackView extends WatchUi.View {
     // only the read-only line items, never the engine or this view. BACK in the
     // delegate pops back to this still-frame (AC3).
     function openContextView() as Void {
+        // Wake-tap grace (review 2026-07-20, Nerya-approved override of the
+        // story's "openContextView stays unguarded" note): a waking DOWN /
+        // swipe-up must not push the context view over the Paused frame —
+        // wake finds Paused (AC2), not a scrolling context. Position-safe
+        // either way; this is a UI-state guard.
+        if (Display.isWakeGrace(_lastWakeMs, System.getTimer(), Display.WAKE_GRACE_MS)) {
+            return;
+        }
         // A chapter card pauses the engine behind it, so guard the card explicitly:
         // the card is not the context affordance (Story 3.5, Task 8). FINISHED is not
         // paused, so isPaused() already excludes it, but guard it for symmetry.
@@ -505,6 +557,16 @@ class PlaybackView extends WatchUi.View {
     // chapter resume (EXPERIENCE.md:85). _cardedIndex stays set so this chapter-start
     // word does not immediately re-card.
     function resumeFromCard() as Void {
+        // Play-site display guard (review 2026-07-20): refuse to resume the
+        // stream onto an unreadable screen — the card stays up, holding like
+        // a Wait card (the one-shot Auto timer has already fired), and a
+        // START on a readable display resumes it. This also closes the
+        // onShow-re-arm hole: an overlay hide/show cycle while the screen is
+        // OFF re-arms the Auto breath, whose timeout lands here and is
+        // refused instead of flowing words onto a dark screen.
+        if (displayUnreadableNow()) {
+            return;
+        }
         _chapterCard = false;
         _engine.play(System.getTimer());
         armTimer();
