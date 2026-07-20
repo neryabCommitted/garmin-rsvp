@@ -51,20 +51,21 @@ function inputKeyMapPaused(logger as Test.Logger) as Boolean {
 }
 
 (:test)
-function inputLightAndMenuNeverConsumed(logger as Test.Logger) as Boolean {
-    // AC4: LIGHT is off-limits (never consumed); the settings MENU is Story 3.8.
-    // Both map to NONE in BOTH reader states.
+function inputLightNeverConsumedMenuClaimed(logger as Test.Logger) as Boolean {
+    // AC4 (3.3): LIGHT is off-limits (never consumed) — NONE in BOTH states.
+    // Story 3.8 AC1: MENU is claimed in BOTH states (playing = pause + open
+    // settings per UX-DR16; paused = open settings).
     if (InputMap.actionForKey(WatchUi.KEY_LIGHT, false) != InputMap.ACTION_NONE) {
         logger.error("LIGHT playing -> NONE"); return false;
     }
     if (InputMap.actionForKey(WatchUi.KEY_LIGHT, true) != InputMap.ACTION_NONE) {
         logger.error("LIGHT paused -> NONE"); return false;
     }
-    if (InputMap.actionForKey(WatchUi.KEY_MENU, false) != InputMap.ACTION_NONE) {
-        logger.error("MENU playing -> NONE"); return false;
+    if (InputMap.actionForKey(WatchUi.KEY_MENU, false) != InputMap.ACTION_MENU) {
+        logger.error("MENU playing -> MENU"); return false;
     }
-    if (InputMap.actionForKey(WatchUi.KEY_MENU, true) != InputMap.ACTION_NONE) {
-        logger.error("MENU paused -> NONE"); return false;
+    if (InputMap.actionForKey(WatchUi.KEY_MENU, true) != InputMap.ACTION_MENU) {
+        logger.error("MENU paused -> MENU"); return false;
     }
     return true;
 }

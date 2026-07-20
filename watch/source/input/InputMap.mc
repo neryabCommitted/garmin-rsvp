@@ -14,11 +14,11 @@ import Toybox.WatchUi;
 //
 // The map's PRINCIPLES are fixed (AC4): every action has a physical-button path;
 // BACK exits (returned as ACTION_EXIT, the delegate lets the system handle it);
-// LIGHT is never consumed; the settings MENU is unused here (Story 3.8). The
-// concrete key/gesture choices are provisional. Imports Toybox.WatchUi only to
-// name the KEY_*/SWIPE_* enum constants — it touches no UI and reads no Storage,
-// so the matco host tester exercises it directly (mirrors how ReaderEngineTest
-// references Protocol/StreamDecoder).
+// LIGHT is never consumed; MENU opens the settings menu (Story 3.8) in BOTH
+// states. The concrete key/gesture choices are provisional. Imports
+// Toybox.WatchUi only to name the KEY_*/SWIPE_* enum constants — it touches no
+// UI and reads no Storage, so the matco host tester exercises it directly
+// (mirrors how ReaderEngineTest references Protocol/StreamDecoder).
 module InputMap {
 
     // Action constants (typed, no magic numbers at call sites).
@@ -29,12 +29,16 @@ module InputMap {
     const ACTION_REWIND = 4;        // UP while paused / rewind swipe
     const ACTION_CONTEXT = 5;       // DOWN while paused — reserved for Story 3.4
     const ACTION_EXIT = 6;          // BACK -> exit to watch face
+    const ACTION_MENU = 7;          // MENU -> settings menu (Story 3.8)
 
     // Map a raw key + the reader's paused state to an action. UP/DOWN are
     // state-aware: while playing they adjust WPM; while paused UP rewinds and
-    // DOWN opens the (3.4) context view. KEY_LIGHT and KEY_MENU map to NONE —
-    // LIGHT is off-limits (never consumed) and the settings menu is Story 3.8.
-    // Anything unrecognised degrades to NONE (bounds-check-and-degrade, AR24).
+    // DOWN opens the (3.4) context view. MENU maps to ACTION_MENU in BOTH
+    // states (Story 3.8: while playing it means "pause + open settings",
+    // UX-DR16; while paused it just opens settings — the resolved reading of
+    // the UX spine, which leaves paused-MENU unmapped). KEY_LIGHT stays NONE —
+    // LIGHT is off-limits, never consumed (UX-DR15). Anything unrecognised
+    // degrades to NONE (bounds-check-and-degrade, AR24).
     function actionForKey(key as Number, isPaused as Boolean) as Number {
         if (key == WatchUi.KEY_ENTER) {
             return ACTION_PAUSE_RESUME;
@@ -47,6 +51,9 @@ module InputMap {
         }
         if (key == WatchUi.KEY_ESC) {
             return ACTION_EXIT;
+        }
+        if (key == WatchUi.KEY_MENU) {
+            return ACTION_MENU;
         }
         return ACTION_NONE;
     }

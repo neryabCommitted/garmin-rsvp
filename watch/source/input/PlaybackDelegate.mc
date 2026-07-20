@@ -55,7 +55,13 @@ class PlaybackDelegate extends WatchUi.InputDelegate {
             _view.openContextView();
             return true;
         }
-        // ACTION_EXIT (BACK -> let the system exit), ACTION_NONE (LIGHT/MENU): do not
+        if (action == InputMap.ACTION_MENU) {
+            // MENU (Story 3.8) — pause if playing, then push the settings menu.
+            // The view owns the pause/guard logic (wake-grace, card, FINISHED).
+            _view.openSettingsMenu();
+            return true;
+        }
+        // ACTION_EXIT (BACK -> let the system exit), ACTION_NONE (LIGHT): do not
         // consume.
         return false;
     }

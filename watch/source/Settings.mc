@@ -44,6 +44,21 @@ module SettingsModel {
     const WPM_MIN = 10;
     const WPM_MAX = 1000;
 
+    // Adaptive WPM step (Story 3.8, Task 6 — the ONE encoding of the step rule,
+    // moved from ReaderEngine so the WPM stepper editor and the engine's
+    // in-flow stepWpmUp/Down can never drift apart). Returns the NEW wpm:
+    // the step is keyed on the CURRENT wpm before stepping — 10 below 100
+    // (where each word is long and 25 would feel coarse), 25 at/above (so
+    // down from 100 lands on 75, the Story 3.3 test-pinned boundary) — and
+    // the result clamps to [WPM_MIN, WPM_MAX]. Pure, Lang-only.
+    function adaptiveWpmStep(current as Number, up as Boolean) as Number {
+        var step = current < 100 ? 10 : 25;
+        var next = up ? current + step : current - step;
+        if (next < WPM_MIN) { return WPM_MIN; }
+        if (next > WPM_MAX) { return WPM_MAX; }
+        return next;
+    }
+
     // Dict keys for the persistence adapter (private to this module's seam).
     const KEY_WPM = "wpm";
     const KEY_PAUSE_MODE = "pauseMode";

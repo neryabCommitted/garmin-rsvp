@@ -145,6 +145,14 @@ class PlaybackView extends WatchUi.View {
     private var _cardChapterNum as Number;
     private var _cardChapterTitle as String?;
 
+    // Settings.wpm was synced from an in-flow UP/DOWN step but not yet
+    // persisted (Story 3.8, Task 5 decision): stepWpm mutates the engine AND
+    // mirrors the value into _settings memory-only, and onHide saves iff this
+    // flag is set — the cold-path transition, never the hot tick path
+    // (deferred-work:129 flash-write hazard). Menu/stepper edits save
+    // immediately and clear it (applyWpm).
+    private var _settingsDirty as Boolean;
+
     function initialize() {
         View.initialize();
         _settings = new SettingsModel.Settings();
@@ -182,6 +190,7 @@ class PlaybackView extends WatchUi.View {
         _cardedIndex = -1; // no card raised yet (word 0 is chapter 1 but never cards)
         _cardChapterNum = 0;
         _cardChapterTitle = null;
+        _settingsDirty = false;
     }
 
     // Auto-play on show so playback is demonstrable without input (Story 3.3 owns
@@ -224,6 +233,14 @@ class PlaybackView extends WatchUi.View {
         // Becoming hidden (carousel navigation, a system overlay) is a catchable
         // transition — force-save before the timer stops (Story 3.6, AC1).
         commitPosition(true);
+        // Persist an in-flow WPM step, if any (Story 3.8, Task 5 decision):
+        // stepWpm syncs _settings.wpm memory-only; this cold-path save is what
+        // keeps a stepped speed across relaunch without a hot-tick flash write.
+        // Also fires when the settings menu is pushed over us — harmless.
+        if (_settingsDirty) {
+            _settings.save();
+            _settingsDirty = false;
+        }
         _timer.stop();
     }
 
@@ -380,6 +397,12 @@ class PlaybackView extends WatchUi.View {
         } else {
             _engine.stepWpmDown();
         }
+        // Sync the model so the stepped speed survives (Story 3.8, Task 5
+        // decision): before this, in-flow steps mutated only the engine and the
+        // next relaunch silently forgot them. Memory-only here (hot-ish path) —
+        // the dirty flag defers the Storage write to onHide (cold path).
+        _settings.wpm = _engine.wpm();
+        _settingsDirty = true;
         _wpmReadoutUntil = System.getTimer() + READOUT_MS;
         WatchUi.requestUpdate();
     }
@@ -447,7 +470,78 @@ class PlaybackView extends WatchUi.View {
         WatchUi.pushView(ctx, new PausedContextDelegate(), WatchUi.SLIDE_UP);
     }
 
+    // MENU in either reader state (Story 3.8, AC1). While playing this means
+    // "pause + open settings" (UX-DR16): freeze instantly at the current word
+    // (pauseAtCurrent, mode-independent — a coast requestPause would flow words
+    // behind the pushed menu) with the 3.6 transition force-save, then push the
+    // Menu2. openContextView is the push/guard template; PlaybackView keeps NO
+    // reference to the pushed menu/delegate (AR15 no-cycle).
+    function openSettingsMenu() as Void {
+        // Wake-tap grace (same rationale as openContextView, review 2026-07-20,
+        // Nerya-approved): a waking MENU press must not push the menu over the
+        // Paused frame — wake finds Paused, not a settings menu.
+        if (Display.isWakeGrace(_lastWakeMs, System.getTimer(), Display.WAKE_GRACE_MS)) {
+            return;
+        }
+        // Input discipline while a card or the Finished screen is up (Story 3.5
+        // Task 8): the card is a breath, FINISHED is terminal (UX-DR14).
+        if (_chapterCard || _engine.isFinished()) {
+            return;
+        }
+        if (_engine.isPlaying() || _engine.isRamping()) {
+            _engine.pauseAtCurrent();
+            // Transition force-save (Story 3.6); a redundant call when the
+            // index was already committed is free (same-index suppression).
+            commitPosition(true);
+        }
+        WatchUi.pushView(SettingsMenu.build(_settings, _engine.wpm()),
+            new SettingsMenuDelegate(_settings, self), WatchUi.SLIDE_UP);
+    }
+
+    // ── immediate-effect propagation for menu edits (Story 3.8, AC2/AC3/AC4) ──
+    // Only the fields COPIED at construction need apply methods: wpm/pauseMode
+    // live in the engine as primitives, fontSize is resolved once into
+    // _fontIndex. Everything else (touchControls, handedness, anchorPct,
+    // phantomWords, focusHighlight, chapterResume) is read from _settings per
+    // event/frame — the menu mutates the same instance, so those propagate for
+    // free (AC4 handedness mirroring included: rewindSwipeDirection reads live).
+
+    // Menu/stepper WPM commit (already persisted by the caller) — takes effect
+    // next word, no drift (engine contract). Clears the in-flow dirty flag: the
+    // committed value IS the saved value now.
+    function applyWpm(v as Number) as Void {
+        _engine.setWpm(v);
+        _settingsDirty = false;
+    }
+
+    function applyPauseMode(v as Number) as Void {
+        _engine.setPauseMode(v);
+    }
+
+    // Re-resolve the persisted fontSize against the ramp (the 3.1-deferred-#94
+    // bound stays enforced here at the view). AC3 note: the shipped renderer
+    // uses NATIVE system fonts (the documented escape hatch, UX-DR2 / the 3.2
+    // font-swap deferral) — every size is firmware-resident, so there is
+    // nothing to load or unload per size. The load-on-demand obligation
+    // ("only the active word-display size is heap-resident") activates when
+    // the Atkinson BMFont swap story replaces fontFor()'s ramp with packaged
+    // font resources — this seam is where that loading will live.
+    function applyFontSize() as Void {
+        _fontIndex = OrpLayout.clampFontIndex(_settings.fontSize, RAMP_LENGTH);
+    }
+
     // ── thin Settings/engine reads for the delegate (keep the delegate dumb) ──
+
+    // The font ramp's ONE length encoding (the menu's fontSize cycle needs it).
+    function fontRampLength() as Number {
+        return RAMP_LENGTH;
+    }
+
+    // Runtime WPM — the source of truth the menu/stepper seed from (the stored
+    // Settings.wpm may trail an uncommitted in-flow step).
+    function engineWpm() as Number {
+        return _engine.wpm();
+    }
     function touchEnabled() as Boolean {
         return _settings.touchControls;
     }

@@ -162,11 +162,11 @@ function engineWordTimingMath(logger as Test.Logger) as Boolean {
 (:test)
 function engineDriftFreeAccumulator(logger as Test.Logger) as Boolean {
     var engine = ReaderEngineTestSupport.newEngine();
-    engine.play(0); // RAMP, beat = 240 ms
+    engine.play(0); // RAMP, beat = clamp(240) = RAMP_BEAT_MIN_MS = 400 (Story 3.8, AC5)
     // Tick 5 ms LATE. The engine must advance one beat but set lastAdvance via
-    // += duration (240), NOT = now (245). That is the whole point of drift-free.
-    engine.onTick(245);
-    if (engine.lastAdvance() != 240) { logger.error("lastAdvance drifted to now (expected 240)"); return false; }
+    // += duration (400), NOT = now (405). That is the whole point of drift-free.
+    engine.onTick(405);
+    if (engine.lastAdvance() != 400) { logger.error("lastAdvance drifted to now (expected 400)"); return false; }
     if (engine.rampRemaining() != 2) { logger.error("ramp did not advance one beat"); return false; }
     return true;
 }
@@ -309,6 +309,63 @@ function engineStartRampThreeBeats(logger as Test.Logger) as Boolean {
     if (!e2.isPaused()) { logger.error("instant pause"); return false; }
     e2.play(100);
     if (!e2.isRamping() || e2.rampRemaining() != 3) { logger.error("resume did not re-arm ramp"); return false; }
+    return true;
+}
+
+// ── Story 3.8 AC5 (deferred-work:133 rider): ramp-beat duration clamp ─────────
+// Each of the 3 ramp beats is clamped to [RAMP_BEAT_MIN_MS, RAMP_BEAT_MAX_MS]
+// independent of WPM — the countdown is neither ~9 s at 20 WPM nor ~360 ms at
+// 500 WPM. Normal word beats stay bare 60000/wpm + bonusMs, untouched.
+
+(:test)
+function engineRampBeatClampedLowWpm(logger as Test.Logger) as Boolean {
+    // wpm 20: word beat = 3000 ms, but each ramp beat clamps DOWN to the max.
+    var engine = ReaderEngineTestSupport.engineAtWpm(20);
+    engine.play(0);
+    // Pin the LITERAL window values, not the constants — comparing against
+    // Reader.RAMP_BEAT_MAX_MS would move with a mutated constant and pin
+    // nothing (caught by the Task-8 seeded-mutation red-check).
+    if (Reader.RAMP_BEAT_MIN_MS != 400 || Reader.RAMP_BEAT_MAX_MS != 1000) {
+        logger.error("ramp clamp window constants != [400, 1000]"); return false;
+    }
+    if (engine.currentDuration() != 1000) {
+        logger.error("wpm 20 ramp beat != 1000 (clamp max)"); return false;
+    }
+    // Ramp is still exactly 3 beats, then the word beat is UNCLAMPED (3000 + bonus 0).
+    for (var i = 0; i < Reader.RAMP_BEATS; i++) { ReaderEngineTestSupport.stepDue(engine); }
+    if (!engine.isPlaying() || engine.index() != 0) { logger.error("ramp not 3 beats at wpm 20"); return false; }
+    if (engine.currentDuration() != 3000) { logger.error("wpm 20 word beat clamped (must stay 3000)"); return false; }
+    // Accumulator re-anchor across the ramp is unchanged: 3 clamped beats accrued
+    // via += duration, so lastAdvance sits exactly at 3 * RAMP_BEAT_MAX_MS.
+    if (engine.lastAdvance() != 3000) {
+        logger.error("accumulator drifted across clamped ramp (expected 3 * 1000)"); return false;
+    }
+    return true;
+}
+
+(:test)
+function engineRampBeatClampedHighWpm(logger as Test.Logger) as Boolean {
+    // wpm 500: word beat = 120 ms, but each ramp beat clamps UP to the min.
+    var engine = ReaderEngineTestSupport.engineAtWpm(500);
+    engine.play(0);
+    if (engine.currentDuration() != 400) {
+        logger.error("wpm 500 ramp beat != 400 (clamp min)"); return false;
+    }
+    for (var i = 0; i < Reader.RAMP_BEATS; i++) { ReaderEngineTestSupport.stepDue(engine); }
+    if (!engine.isPlaying() || engine.index() != 0) { logger.error("ramp not 3 beats at wpm 500"); return false; }
+    if (engine.currentDuration() != 120) { logger.error("wpm 500 word beat clamped (must stay 120)"); return false; }
+    return true;
+}
+
+(:test)
+function engineRampBeatInsideWindowUnclamped(logger as Test.Logger) as Boolean {
+    // A non-divisor wpm whose bare beat falls INSIDE the window passes through:
+    // 60000 / 137 = 437 (integer ms), 400 <= 437 <= 1000.
+    var engine = ReaderEngineTestSupport.engineAtWpm(137);
+    engine.play(0);
+    if (engine.currentDuration() != 60000 / 137) {
+        logger.error("wpm 137 ramp beat must pass through unclamped"); return false;
+    }
     return true;
 }
 
