@@ -88,6 +88,11 @@ class PaceTurnerApp extends Application.AppBase {
         // comes from the per-transition force-saves inside PlaybackView.
         if (_playbackView != null) {
             (_playbackView as PlaybackView).commitOnStop();
+            // Story 3.8 review: also flush an in-flow WPM step on this cold-path
+            // exit (position first — sacred — settings second), so a stepped
+            // speed survives an onStop-reachable kill that skipped the view's
+            // onHide. Cold path, once per session: no flash-wear concern.
+            (_playbackView as PlaybackView).saveDirtySettings();
         }
         // Story 3.7 (Task 5): release the screen-on strategy — position save
         // FIRST, strategy teardown second (position is the sacred state).

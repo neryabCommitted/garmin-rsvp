@@ -75,12 +75,19 @@ class SettingsMenuDelegate extends WatchUi.Menu2InputDelegate {
             return; // unrecognized id degrades to a no-op (NFR8) — nothing to save
         }
         _settings.save(); // cold path: one flat dict under the "settings" key
+        // The save above serialized the FULL dict, so any in-flow WPM step the
+        // view mirrored into _settings.wpm is now durable — clear its dirty flag
+        // to avoid a redundant re-save when onHide fires on menu dismiss.
+        _view.markSettingsPersisted();
         WatchUi.requestUpdate();
     }
 
     // BACK pops to the Paused frame beneath — never exits the app from the menu
     // (BACK-sacred, UX-DR15; PausedContextDelegate is the template). The
-    // revealed PlaybackView's onShow STATE_IDLE guard keeps it Paused.
+    // revealed PlaybackView fires onShow: a PAUSED/PLAYING engine is left as-is;
+    // only a never-played IDLE engine (fresh-install first-launch demo whose
+    // auto-play an unreadable screen deferred) resumes that intended demo — a
+    // restored position is PAUSED, not IDLE, so it never auto-plays here.
     function onBack() as Void {
         WatchUi.popView(WatchUi.SLIDE_DOWN);
     }

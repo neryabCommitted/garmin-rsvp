@@ -4,7 +4,7 @@ baseline_commit: ec3f42014081f2a077f9d73434a4c3e587fd40ce
 
 # Story 3.8: Settings menu UI
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -197,3 +197,15 @@ Claude Fable 5 (claude-fable-5) — dev-story workflow, 2026-07-20/21.
 
 - 2026-07-21: Story 3.8 implemented (Tasks 1–8): settings Menu2 + delegate, WPM stepper editor, adaptiveWpmStep moved to SettingsModel (one encoding), ramp-beat clamp 400–1000 ms, in-flow WPM dirty-flag persistence, MENU key claimed. 96/96 host tests @ Strict L3 in CI image (87→96), seeded-mutation red-check exact (after hardening a vacuous constant-relative pin), both builds warning-free, release 47,964 B. Status → review; Task 9 on-device check pending.
 - 2026-07-23: On-device Task 9 PASS (Fenix 8, Nerya). One amendment from the wrist: WPM editor now **commits on exit** (both START and BACK save; was START=commit/BACK=cancel, which was unclear and discarded on BACK) — `WpmStepperDelegate.commitAndPop()`. FINISHED-no-op confirmed keep-disabled; touch-on-native-menu confirmed intended; Task 5 in-flow-WPM-persistence decision stands. Amendment re-tested on device (BACK saves, START saves). Change is UI-delegate-only (no host-tested path); re-ran full suite on the correct desktop-linux image: 96/96 @ Strict L3, both builds warning-free, release 47,964 B. Task 9 complete → ready for code-review.
+
+### Review Findings
+
+Code review 2026-07-23 (3 layers — Blind Hunter, Edge Case Hunter, Acceptance Auditor). All 5 ACs assessed **MET** (AC3/AC4 per their notes). 13 raw findings → 2 decision-needed (both resolved: 1 → patch, 1 → defer), 4 patch, 1 defer, 6 dismissed. No high/medium correctness defects; all patches are low (durability/comment/efficiency).
+
+- [x] [Review][Patch] Flush dirty settings at App exit — `PlaybackView.stepWpm()` mirrors the stepped speed into `_settings.wpm` memory-only + `_settingsDirty`, and ONLY the view's `onHide()` flushes it (PlaybackView.mc:240-243). Position has three backstops (per-transition force-save, ~15 s tick debounce, `App.onStop → commitOnStop`), but `commitOnStop()` saves position ONLY (PlaybackView.mc:272-274, PaceTurnerApp.mc:89-91), so a kill that reaches `onStop` but skips `onHide` reverts the stepped WPM. Fix: flush the view's dirty settings from `App.onStop` (cold path, once per session — no flash-wear concern, symmetric with position). [watch/source/PaceTurnerApp.mc:89] — resolved from Decision 1 (Nerya, add-flush). Sources: blind+edge.
+- [x] [Review][Patch] Stale header in WpmStepperView — comment says "candidate is uncommitted until START (BACK cancels — nothing touched)", contradicting the commit-on-exit amendment (both exits save). [watch/source/views/WpmStepperView.mc:16]
+- [x] [Review][Patch] Misleading onBack comment — claims "the revealed PlaybackView's onShow STATE_IDLE guard keeps it Paused", but the `onShow` STATE_IDLE branch auto-plays (PlaybackView.mc:215-223). Behavior is benign (IDLE only on a fresh-install first-launch whose auto-play was deferred by an unreadable screen — closing the menu resumes that intended demo; restored positions are PAUSED, not IDLE), but the comment asserts the opposite. Fix the comment (Task 4 line 59 repeats the same wrong claim). [watch/source/input/SettingsMenuDelegate.mc:84]
+- [x] [Review][Patch] `_settingsDirty` left stale after a non-WPM menu edit — `SettingsMenuDelegate.onSelect` calls `_settings.save()` (which serializes `wpm` too), so an outstanding in-flow step is now persisted, but the flag stays true (only `applyWpm`/`onHide` clear it) → `onHide` does a second, redundant flash write. Clear the flag on the menu-save path. [watch/source/input/SettingsMenuDelegate.mc:77]
+- [x] [Review][Defer] WPM stepper commit-on-exit guaranteed only on the button path [watch/source/input/WpmStepperDelegate.mc:55] — deferred (Decision 2, on-device probe): button commit path confirmed on-device (Task 9); touch-back-swipe delivery on the raw-InputDelegate stepper needs a Fenix-8 probe before deciding on a guard. A stray `KEY_MENU` inside the editor (onKey returns false → firmware nav) rides the same probe.
+
+Dismissed (6): MENU→onKey delivery device-dependence (on-device confirmed both states, Task 9); `applyPauseMode` "immediate effect" on the current pause (pauseMode governs the *next* pause by definition; `setPauseMode` is live — correct); `cycleAnchorPct` off-grid → 35 and `cycleFontSize(-1)` skip-largest (both documented bounds-check-and-degrade, latent — the model emits no such values — and pinned as intended); `labelForFontSize` hardcoded to 5 vs `rampLength` (semantic labels; RAMP_LENGTH is fixed until the Atkinson BMFont swap story, which re-centers the whole ramp); font-size "±2 steps" surfaced as 5 named steps (the resolved Dev-Notes reading, compliant).

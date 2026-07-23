@@ -237,11 +237,20 @@ class PlaybackView extends WatchUi.View {
         // stepWpm syncs _settings.wpm memory-only; this cold-path save is what
         // keeps a stepped speed across relaunch without a hot-tick flash write.
         // Also fires when the settings menu is pushed over us — harmless.
+        saveDirtySettings();
+        _timer.stop();
+    }
+
+    // Flush a pending in-flow WPM step (Story 3.8, Task 5 + review 2026-07-23).
+    // Called from onHide (the common carousel path) AND from App.onStop via the
+    // cold-path exit hook, so a stepped speed survives a kill that reaches
+    // onStop but skips onHide — symmetric with commitOnStop for position. Cold
+    // path, once per transition/exit: no hot-tick flash-write hazard.
+    function saveDirtySettings() as Void {
         if (_settingsDirty) {
             _settings.save();
             _settingsDirty = false;
         }
-        _timer.stop();
     }
 
     // ── position persistence routing (Story 3.6, AC1) ──
@@ -511,6 +520,13 @@ class PlaybackView extends WatchUi.View {
     // committed value IS the saved value now.
     function applyWpm(v as Number) as Void {
         _engine.setWpm(v);
+        _settingsDirty = false;
+    }
+
+    // The settings menu persisted the full dict (Story 3.8 review): any in-flow
+    // WPM step mirrored into _settings.wpm is now durable, so clear the dirty
+    // flag — otherwise onHide (fired on menu dismiss) does a redundant re-save.
+    function markSettingsPersisted() as Void {
         _settingsDirty = false;
     }
 

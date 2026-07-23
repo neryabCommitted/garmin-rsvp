@@ -13,7 +13,8 @@ import Toybox.WatchUi;
 // Void with a small "WPM" title in Ink-Dim (watch-meta), inside the
 // watch-safe-square (DESIGN.md card regime — centered content, guide-margin
 // insets). All input/commit logic lives in WpmStepperDelegate; the candidate
-// is uncommitted until START (BACK cancels — nothing touched).
+// commits on ANY exit — both START and BACK save it (commit-on-exit, the
+// on-device Task-9 amendment); to undo, step back to the old value.
 class WpmStepperView extends WatchUi.View {
 
     // DESIGN palette (DESIGN.md Colors) — same roles as PlaybackView.
