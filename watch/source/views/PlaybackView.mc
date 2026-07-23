@@ -589,6 +589,22 @@ class PlaybackView extends WatchUi.View {
         if (maybeEnterChapterCard(now)) {
             return;
         }
+        // Gate V4 auto-replay (Story 3.9, Task 2) — GATE BUILD ONLY. On end-of-
+        // book, seek back to word 0 and replay so the render loop + display +
+        // BLE-connected radio run continuously for the full measurement hour
+        // (the 228-word canned source is ~46 s at 300 WPM). Looping the small
+        // buffered source keeps heap flat (NFR2) and re-exercises ramp + chapter
+        // cards + Finished each lap. Behind BatteryGate.ENABLED (false in every
+        // release build), so the shipped FINISHED behaviour — Finished screen,
+        // BACK exits, no rewind (UX-DR14) — is untouched. seekTo(0) lands PAUSED
+        // with no transition; play() re-anchors the ramp (no catch-up burst).
+        if (BatteryGate.ENABLED && _engine.isFinished()) {
+            _engine.seekTo(0);
+            _engine.play(System.getTimer());
+            armTimer();
+            WatchUi.requestUpdate();
+            return;
+        }
         if (_engine.isPlaying() || _engine.isRamping()) {
             commitPosition(false); // steady stream: debounced ~15 s (Story 3.6)
             WatchUi.requestUpdate();

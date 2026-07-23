@@ -16,6 +16,13 @@ class PaceTurnerApp extends Application.AppBase {
     // string; the shared StorageKeys module is an Epic 4 deliverable.
     private const EVIDENCE_KEY = "gateV2RunLog";
 
+    // Story 3.9 (Gate V4): a second temporary gate key for the previous run's
+    // battery evidence, kept separate from the GateV2 receive log so both can
+    // coexist. Persist-then-println, same pattern. Only ever read/written when
+    // BatteryGate.ENABLED (the sideloaded gate build) — the release build never
+    // touches it.
+    private const BATTERY_KEY = "gateV4Battery";
+
     // Two-press reset window: one accidental START must not destroy a run's
     // evidence (it destroyed Run B's watch ledger at ~chunk 72).
     private const RESET_ARM_WINDOW_MS = 3000;
@@ -36,6 +43,11 @@ class PaceTurnerApp extends Application.AppBase {
     // App back (no cycle, AR15).
     private var _playbackView as PlaybackView?;
 
+    // Story 3.9 (Gate V4): the coarse battery sampler. Constructed ONLY in the
+    // gate build (BatteryGate.ENABLED) — null in every release build, so its
+    // ~60 s timer never arms and no new runtime work ships.
+    private var _batterySampler as BatteryGate.Sampler?;
+
     // Counter generation, bumped on every reset: ack listener callbacks from
     // before a reset are discarded so a straddling ack cannot skew the fresh
     // window (Run B's display showed A leading V exactly this way).
@@ -53,6 +65,7 @@ class PaceTurnerApp extends Application.AppBase {
         _lastEncoding = "?";
         _resetArmedAt = null;
         _playbackView = null;
+        _batterySampler = BatteryGate.ENABLED ? new BatteryGate.Sampler() : null;
         _gen = 0;
     }
 
@@ -68,6 +81,24 @@ class PaceTurnerApp extends Application.AppBase {
         if (previous != null) {
             System.println("GateV2 evidence (previous run):");
             System.println(previous);
+        }
+        // Story 3.9 (Gate V4): surface the previous run's battery evidence and
+        // begin coarse sampling for THIS session. Gate build only — no-op in
+        // release (sampler is null, key untouched). The app session IS the
+        // reading session in the gate scenario, so App onStart/onStop are the
+        // natural sampler bracket.
+        if (BatteryGate.ENABLED && _batterySampler != null) {
+            var prevBattery = null;
+            try {
+                prevBattery = Storage.getValue(BATTERY_KEY);
+            } catch (e) {
+                prevBattery = null;
+            }
+            if (prevBattery != null) {
+                System.println("GateV4 battery evidence (previous run):");
+                System.println(prevBattery);
+            }
+            (_batterySampler as BatteryGate.Sampler).start();
         }
         Communications.registerForPhoneAppMessages(method(:onPhoneMessage));
     }
@@ -100,6 +131,22 @@ class PaceTurnerApp extends Application.AppBase {
         // the Active variant's session teardown swaps in behind the seam.
         if (_playbackView != null) {
             (_playbackView as PlaybackView).shutdownDisplay();
+        }
+        // Story 3.9 (Gate V4): stop sampling and persist the battery evidence for
+        // next-launch println. Gate build only. WPM is the run parameter (battery
+        // ∝ redraw rate) — read from the live engine here, last (position + the
+        // display strategy are already handled above; this instrumentation is
+        // independent of the sacred state). Guarded like the GateV2 write.
+        if (BatteryGate.ENABLED && _batterySampler != null) {
+            var sampler = _batterySampler as BatteryGate.Sampler;
+            sampler.stop();
+            var wpm = _playbackView != null
+                ? (_playbackView as PlaybackView).engineWpm() : 0;
+            try {
+                Storage.setValue(BATTERY_KEY, sampler.evidence(wpm));
+            } catch (e) {
+                System.println("GateV4: battery evidence persist failed");
+            }
         }
     }
 
