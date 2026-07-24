@@ -166,6 +166,16 @@ Tasks 1–3 (the thin, honest instrumentation) are complete, TDD'd, and validate
 
 **Next steps (human):** flip nothing — the gate build is already at `watch/bin/PaceTurner.prg`. Sideload it, run the **On-Device Procedure** (Task 4), capture the next-launch `GateV4 battery: …` println verbatim, hand it back with the Task 6 observations. Then dev records §V4 (Task 5).
 
+**Preliminary on-device attempt (2026-07-24, Fenix 8, Nerya) — INCONCLUSIVE, carried forward.** Gate build sideloaded by dev (Amelia) over MTP; Nerya ran a valid off-charger session and reconnected the watch; dev read the evidence from the device log `GARMIN/Apps/LOGS/PaceTurner.TXT`:
+
+```
+GateV4 start:99.0%,end:99.0%,drain:0.0%,rate:0.0%/h,min:99.0%,elapsedMs:2194494,samples:37,wpm:300,charging:false
+```
+
+- **Valid** (`charging:false`, off charger) and the app sustained a continuous hands-off session for **36.6 min** (37 samples, 60 s cadence) with no crash — instrumentation + auto-replay + persist-then-println all proven end-to-end on real hardware.
+- **Inconclusive, NOT a pass:** the run started at the 100% flat-top (99%), so in 36.6 min no 1% battery quantum crossed → 0% drain → `rate:0.0%/h` is a flat-top artifact carrying no signal about the steady-state rate. Recorded as **preliminary — inconclusive** in `docs/gates.md` §V4 (a 5th verdict-matrix row); explicitly not laundered into a pass.
+- **Re-run needed** from mid-curve (~90%), on-wrist, 300 WPM, ≥60 min. Tasks 4–6 stay open; per Nerya this is a **carry-forward, not an epic-retro blocker**. Task 6 observations (#139/#137/#129) were not usable on a 0-drain run and roll into the re-run.
+
 ### File List
 
 - **NEW** `watch/source/gate/BatteryGate.mc` — the gate flag + pure `drainPerHour`/`evidenceString` + the `Sampler` adapter.

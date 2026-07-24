@@ -13,7 +13,7 @@ references this page. See architecture §"Validation gates" (AR27–AR31).
 | **V1** | AMOLED screen-on for ≥60-min hands-off reading (+ dim-AON fallback legibility) | **passed-dim** (2026-06-11) | Lit-dim & legible 61 min hands-off; never OFF; one-button restore works. FR4 satisfied in its fallback form |
 | **V2** | Reliable repeated phone→watch sends (Android first-send bug defeated); bridge sufficiency (OQ2) | **passed** (2026-06-11) | 400/400 first-try ack-confirmed sends (200 × 2 encodings); bug not observed; OQ2 = keep stock plugin, base64 transport ([ADR 0002](decisions/0002-oq2-companion-bridge.md)) |
 | **V3** | Per-message chunk-size ceiling (`BLE_REQUEST_TOO_LARGE` threshold) | **passed** (2026-06-13) | Transport ceiling = phone serializer cap (α) 16 384 B serialized; safe working chunk **11 584 B binary / 15 448 B wire** (~1158 words). Tighter real limit: watch decode-watchdog → Epic 4 decodes incrementally, not in the BLE callback |
-| **V4** | 1-hour reading session battery drain vs ≤10%/hour target | not started | — |
+| **V4** | 1-hour reading session battery drain vs ≤10%/hour target | **preliminary — inconclusive** (2026-07-24) | 37-min VALID run (off charger) started at 99% → 0% drain, rate 0.0%/h; the 100%-flat-top swallowed the signal (no 1% quantum crossed) — not a pass, not a fail. Re-run from ~90% pending |
 
 ## V1 — Hands-off screen-on (Story 1.3)
 _Procedure:_ minimal spike opening an `ActivityRecording.Session`; verify the display stays lit
@@ -229,4 +229,54 @@ the planned 200–500-word (~2–5 KB) chunk:
 
 ## V4 — Reading-session battery (Story 3.9)
 _Procedure:_ 60-min continuous session on hardware (screen on, sync connected); measure drain.
-_Status:_ not started. _Result:_ —
+_Status:_ **preliminary — inconclusive** (2026-07-24, real Fenix 8, Nerya). _Result:_ instrumentation
+proven end-to-end on a valid off-charger run, but the measurement is **inconclusive** — the run started
+at the top of the discharge curve (99%) and no measurable drain accrued. **Not recorded as a pass.**
+Premise-rework flag: **not raised** (nothing measured to raise it on). Re-run from mid-curve pending.
+
+**Method.** Sideloaded gate build (`BatteryGate.ENABLED = true`, `watch/source/gate/BatteryGate.mc`):
+a coarse battery sampler on its own 60 s `Timer.Timer` (off the per-word render loop, deferred-work #129)
+reads `System.getSystemStats().battery/.charging`, accumulating start/end/min/charging-seen/sampleCount;
+gate-scoped auto-replay loops the 228-word canned source (`PlaybackView.onTimerTick`) so the render loop
++ display + BLE-connected radio run continuously. Evidence persisted in `onStop`, printed on next launch
+(persist-then-println), read from the device log `GARMIN/Apps/LOGS/PaceTurner.TXT` over MTP — no screen
+transcription (memory hardware-run-results-machine-readable). App-mode path (ADR 0003): no Fit, no session.
+
+**Measured** (evidence string, verbatim):
+
+```
+GateV4 start:99.0%,end:99.0%,drain:0.0%,rate:0.0%/h,min:99.0%,elapsedMs:2194494,samples:37,wpm:300,charging:false
+```
+
+| Quantity | Value |
+|---|---|
+| Duration | 2 194 494 ms = **36.6 min** (target ≥60; short by design — dev time-boxed) |
+| Samples | 37 (60 s cadence, clean) |
+| `charging` | **false** — VALID run, off charger (the V1 charger-contamination trap avoided) |
+| Start → end battery | 99% → 99%, **min 99%** |
+| Absolute drain | **0%** (no 1% quantum crossed) |
+| Extrapolated rate | 0.0%/h — **not extrapolable** (see below) |
+| WPM | 300 |
+
+**Why inconclusive (not a pass).** The Fenix reports battery in ~1% steps, and the top of a Li-ion
+discharge curve is flat — a freshly-charged battery holds at 99–100% disproportionately long regardless
+of energy actually drawn (Garmin's own `Stats.battery` note). Starting at 99%, 36.6 min was not enough for
+even one 1% quantum to cross, so the measurement carries no signal about the steady-state hourly rate.
+`rate:0.0%/h` is an artifact of the flat top, **not** evidence of ≤10%/hour — recording it as a pass would
+launder a non-measurement. The one honest positive: the run was valid (off charger) and the app sustained
+a continuous hands-off session with no crash for 36.6 min.
+
+**Verdict matrix** (observed row in bold — a 5th condition beyond the story's four):
+
+| Observed | Verdict | Consequence |
+|---|---|---|
+| Drain ≤ 10%/hour, no low-battery trip, charging never seen | V4 passed | Threshold + FR4 app-mode endurance confirmed |
+| Drain > 10%/hour, no low-battery trip | V4 measured-over-target — flag per AC2 | Revisit threshold or screen-on strategy |
+| Session silently trips low-battery behaviour | V4 flagged — safety-net concern | Investigate before store listing |
+| `charging == true` seen mid-run | V4 invalid — re-run off charger | Discard and repeat |
+| **Valid run, but started on the 100% flat-top → 0 quanta crossed** | **V4 inconclusive — no signal, not extrapolable** | **Re-run from mid-curve (~90%) for the full hour; do NOT read the flat-top 0% as a pass** |
+
+**Product implication / next step.** Re-run the gate build from **~90%** (wear/use the watch off-charger
+until it drops below the flat top), hands-off, on-wrist, 300 WPM, **≥60 min**, so several 1% quanta cross
+and the rate is real. The instrumentation and the valid-off-charger protocol are proven — only the start
+point needs fixing. Carried forward from Epic 3 (does not block the epic retrospective).
